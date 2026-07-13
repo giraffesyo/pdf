@@ -1,5 +1,8 @@
 # pdf
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/giraffesyo/pdf.svg)](https://pkg.go.dev/github.com/giraffesyo/pdf)
+[![CI](https://github.com/giraffesyo/pdf/actions/workflows/ci.yml/badge.svg?branch=canary)](https://github.com/giraffesyo/pdf/actions/workflows/ci.yml)
+
 Robust PDF text extraction in pure Go — with glyph positions, hardened
 against real-world (and hostile) files.
 
