@@ -168,7 +168,9 @@ func (r *Reader) object(num, gen int) (any, error) {
 // Strings in a directly-parsed object are decrypted here (object-stream
 // contents arrive already decrypted and skip this path).
 func (r *Reader) parseObjectAt(off int64, wantNum, wantGen int) (any, error) {
-	window := int64(1 << 16)
+	// Most objects are a few hundred bytes; start small and grow for the
+	// rare large direct object rather than reading 64 KB per object.
+	window := int64(4 << 10)
 	for {
 		buf := r.slice(off, window)
 		obj, consumed, isStream, err := r.parseIndirect(buf, off, wantNum, wantGen)

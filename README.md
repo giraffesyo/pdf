@@ -63,6 +63,24 @@ output you can detect, instead of plausible-looking noise.
 - Image filters (DCT/JPX/CCITT/JBIG2) are not decoded — text extraction
   never needs them.
 
+## Benchmarks
+
+The `benchmarks/` directory is a separate module (so its dependencies stay
+out of this one) that compares extraction against
+[ledongthuc/pdf](https://github.com/ledongthuc/pdf) and
+[rsc.io/pdf](https://pkg.go.dev/rsc.io/pdf) over identical synthetic
+corpora:
+
+```
+cd benchmarks
+go test -run TestCompetitorComparison -v ./...   # support matrix
+go test -bench . -benchmem -run '^$' ./...        # ns/op, B/op, allocs/op
+```
+
+The support matrix shows this package extracting text from every corpus —
+including Form XObjects, xref streams, object streams, and encrypted files
+— where the others return empty text or fail.
+
 ## pdftest
 
 `github.com/giraffesyo/pdf/pdftest` builds minimal synthetic PDFs for
