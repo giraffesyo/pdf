@@ -1,10 +1,10 @@
 package pdf
 
 import (
-	"io"
 	"strconv"
 
-	ldpdf "github.com/ledongthuc/pdf"
+	"github.com/giraffesyo/pdf/internal/object"
+	"github.com/giraffesyo/pdf/internal/safeio"
 )
 
 // This file lexes and executes raw content-stream bytes. The library's own
@@ -36,56 +36,31 @@ type operand struct {
 }
 
 const (
-	// maxStreamBytes bounds decompressed stream size (decompression bombs).
-	maxStreamBytes = 64 << 20
+	maxStreamBytes = safeio.MaxStreamBytes
 	maxOperandNest = 64
 	maxStackDepth  = 4096
 )
 
-// readStreamBounded reads a stream's decoded bytes with defenses the
-// library lacks: a total-size cap and a stall guard (filter readers that
-// keep returning (0, nil) would otherwise loop io.ReadAll forever).
-func readStreamBounded(v ldpdf.Value) (out []byte) {
-	defer func() {
-		if recover() != nil {
-			out = nil
-		}
-	}()
-	if v.Kind() != ldpdf.Stream {
+// readStreamBounded reads a stream's decoded bytes with a total-size cap
+// and a stall guard (a filter reader that keeps returning (0, nil) would
+// otherwise loop io.ReadAll forever). A non-stream value, or a stream
+// whose filter chain errors, yields nil.
+func readStreamBounded(v object.Value) []byte {
+	if v.Kind() != object.Stream {
 		return nil
 	}
-	rc := v.Reader()
-	defer func() { _ = rc.Close() }() // read-only handle
-	return readAllGuarded(rc)
-}
-
-// readAllGuarded reads r until error, the size cap, or a run of empty
-// reads (a stalled reader violating the io.Reader contract).
-func readAllGuarded(r io.Reader) []byte {
-	var out []byte
-	buf := make([]byte, 64<<10)
-	zeros := 0
-	for len(out) < maxStreamBytes {
-		n, err := r.Read(buf)
-		out = append(out, buf[:n]...)
-		if err != nil {
-			break
-		}
-		if n == 0 {
-			if zeros++; zeros > 100 {
-				break
-			}
-			continue
-		}
-		zeros = 0
+	rc, err := v.Reader()
+	if err != nil {
+		return nil
 	}
-	return out
+	defer func() { _ = rc.Close() }() // read-only handle
+	return safeio.ReadAllGuarded(rc)
 }
 
 // contentBytes returns the page's full content: /Contents may be a single
 // stream or an array of streams that form one logical stream.
-func contentBytes(contents ldpdf.Value) []byte {
-	if contents.Kind() == ldpdf.Array {
+func contentBytes(contents object.Value) []byte {
+	if contents.Kind() == object.Array {
 		var data []byte
 		for i := 0; i < contents.Len() && len(data) < maxStreamBytes; i++ {
 			data = append(data, readStreamBounded(contents.Index(i))...)

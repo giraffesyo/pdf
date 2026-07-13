@@ -32,9 +32,10 @@ type Reader struct {
 	dec     *crypt.Decryptor
 	encNum  int // object number of the /Encrypt dict (strings never decrypt)
 
-	cache   map[int]any // resolved objects, keyed by number
-	objStms *objStmCache
-	err     error // first resolution error (sticky)
+	cache     map[int]any  // resolved objects, keyed by number
+	resolving map[int]bool // objects mid-resolution, to break cycles
+	objStms   *objStmCache
+	err       error // first resolution error (sticky)
 }
 
 // NewReader parses the file's cross-reference data and trailer, preparing
@@ -53,10 +54,11 @@ func NewReader(ra io.ReaderAt, size int64) (*Reader, error) {
 		size -= base
 	}
 	r := &Reader{
-		ra:      ra,
-		size:    size,
-		cache:   map[int]any{},
-		objStms: newObjStmCache(),
+		ra:        ra,
+		size:      size,
+		cache:     map[int]any{},
+		resolving: map[int]bool{},
+		objStms:   newObjStmCache(),
 	}
 	if err := r.readXref(); err != nil {
 		return nil, err
@@ -133,6 +135,14 @@ func (r *Reader) object(num, gen int) (any, error) {
 	if v, ok := r.cache[num]; ok {
 		return v, nil
 	}
+	// Break reference cycles: an object whose own parsing needs itself
+	// (e.g. a stream /Length that points back at the stream object).
+	if r.resolving[num] {
+		return nil, fmt.Errorf("pdf: cyclic reference to object %d", num)
+	}
+	r.resolving[num] = true
+	defer delete(r.resolving, num)
+
 	e := r.xref[num]
 	var (
 		obj any

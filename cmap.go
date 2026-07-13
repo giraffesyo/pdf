@@ -4,15 +4,15 @@ import (
 	"encoding/hex"
 	"unicode/utf16"
 
-	ldpdf "github.com/ledongthuc/pdf"
+	"github.com/giraffesyo/pdf/internal/object"
 )
 
 const maxCmapEntries = 100000
 
 // parseToUnicode reads a /ToUnicode CMap stream into a code → text map.
 // Returns nil when absent or unparsable.
-func parseToUnicode(v ldpdf.Value) map[uint32]string {
-	if v.Kind() != ldpdf.Stream {
+func parseToUnicode(v object.Value) map[uint32]string {
+	if v.Kind() != object.Stream {
 		return nil
 	}
 	data := readStreamBounded(v)

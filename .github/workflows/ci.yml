@@ -58,5 +58,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
-      - name: fuzz 60s
-        run: go test -fuzz '^FuzzExtract$' -fuzztime 60s .
+      - name: fuzz Extract 60s
+        run: go test -run '^$' -fuzz '^FuzzExtract$' -fuzztime 60s .
+      - name: fuzz Reader 60s
+        run: go test -run '^$' -fuzz '^FuzzReader$' -fuzztime 60s ./internal/object

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giraffesyo/pdf/internal/safeio"
 	"github.com/giraffesyo/pdf/pdftest"
 )
 
@@ -133,7 +134,7 @@ func TestStalledStreamGuard(t *testing.T) {
 	// readStreamBounded must not hang on a reader that keeps returning
 	// (0, nil) — simulated via a stub since real filter chains are opaque.
 	rs := &stallReader{}
-	got := readAllGuarded(rs)
+	got := safeio.ReadAllGuarded(rs)
 	if len(got) != 3 {
 		t.Errorf("got %d bytes, want 3", len(got))
 	}
