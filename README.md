@@ -6,6 +6,8 @@
 Robust PDF text extraction in pure Go — with glyph positions, hardened
 against real-world (and hostile) files.
 
+**Zero dependencies.** Built entirely on Go's standard library.
+
 ```go
 import "github.com/giraffesyo/pdf"
 
@@ -69,17 +71,62 @@ The `benchmarks/` directory is a separate module (so its dependencies stay
 out of this one) that compares extraction against
 [ledongthuc/pdf](https://github.com/ledongthuc/pdf) and
 [rsc.io/pdf](https://pkg.go.dev/rsc.io/pdf) over identical synthetic
-corpora:
+corpora. The corpus checks both whether the expected text is recovered and
+whether extraction completes safely. A comparator that returns incorrect
+text, errors, or panics is excluded from the performance run for that
+fixture.
+
+Results below were measured on 2026-07-13 at commit `07f0abd`, using Go
+`1.26.1` on macOS `26.5.1` (`darwin/arm64`, Apple M5 Pro). Values are one
+run of `go test -bench . -benchmem -run '^$' -count=1 ./...`; rerun on your
+own hardware before making a performance decision.
+
+| Corpus | this package | ledongthuc/pdf | rsc.io/pdf |
+|---|---:|---:|---:|
+| simple | ok | ok | incorrect text |
+| Form XObject | ok | incorrect text | incorrect text |
+| Flate-compressed content | ok | ok | incorrect text |
+| xref stream | ok | ok | incorrect text |
+| object stream | ok | ok | incorrect text |
+| RC4-encrypted | ok | unsupported | unsupported |
+
+Latency (`ns/op`):
+
+| Corpus | this package | ledongthuc/pdf |
+|---|---:|---:|
+| simple | 31,667 | 25,435 |
+| Form XObject | 48,147 | incorrect text |
+| Flate content | 43,569 | 38,655 |
+| xref stream | 50,425 | 24,787 |
+| object stream | 47,989 | 42,815 |
+| RC4-encrypted | 76,025 | unsupported |
+
+Memory (`B/op`) and allocations (`allocs/op`):
+
+| Corpus | this package B/op | ledongthuc/pdf B/op | this package allocs/op | ledongthuc/pdf allocs/op |
+|---|---:|---:|---:|---:|
+| simple | 120,690 | 62,960 | 175 | 368 |
+| Form XObject | 190,090 | incorrect text | 222 | incorrect text |
+| Flate content | 166,050 | 107,888 | 193 | 386 |
+| xref stream | 186,681 | 62,880 | 180 | 365 |
+| object stream | 252,473 | 100,336 | 200 | 541 |
+| RC4-encrypted | 218,257 | unsupported | 338 | unsupported |
+
+To reproduce the support matrix and performance measurements:
 
 ```
 cd benchmarks
 go test -run TestCompetitorComparison -v ./...   # support matrix
-go test -bench . -benchmem -run '^$' ./...        # ns/op, B/op, allocs/op
+go test -bench . -benchmem -run '^$' -count=1 ./... # raw results above
+# For a less noisy local comparison, repeat and analyze the output:
+go test -bench . -benchmem -run '^$' -count=5 ./...
 ```
 
-The support matrix shows this package extracting text from every corpus —
-including Form XObjects, xref streams, object streams, and encrypted files
-— where the others return empty text or fail.
+The corpus is synthetic and deliberately small: it measures parser and
+extractor behavior, not throughput on a representative production document
+set. It does show that this package recovers the expected text from every
+fixture, including Form XObjects, xref streams, object streams, and
+encrypted files.
 
 ## pdftest
 
