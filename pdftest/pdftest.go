@@ -1,8 +1,10 @@
-// Package pdftest builds minimal, uncompressed PDF files for tests, in
-// the spirit of net/http/httptest. The helpers make it easy to construct
-// documents that reproduce structural patterns seen in real-world PDFs —
-// Form XObjects, composite fonts, ToUnicode CMaps, segmented content
-// streams — from entirely synthetic content.
+// Package pdftest builds minimal synthetic PDF files for tests, in the
+// spirit of net/http/httptest. The helpers reproduce structural patterns
+// seen in real-world PDFs — Form XObjects, composite fonts, ToUnicode
+// CMaps, segmented content streams (this file); Flate streams, PDF 1.5
+// cross-reference streams, object streams, and hybrid-reference files
+// (xref.go); and standard-handler-encrypted files (crypt.go) — from
+// entirely synthetic content.
 package pdftest
 
 import (

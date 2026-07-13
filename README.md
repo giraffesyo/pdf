@@ -40,11 +40,13 @@ text extraction breaks on files that are common in the wild:
 | Cyclic page trees | stack overflow (crash) | rejected upfront |
 | Inline images (BI/ID/EI) | derails the lexer | skipped cleanly |
 
-It still uses ledongthuc/pdf's object/xref parsing and standard font
-encodings underneath (aliased internally); everything from the content
-stream down — lexer, interpreter, text state machine, CTM/Form-XObject
-handling, ToUnicode parsing, CID widths — is implemented here. Replacing
-the remaining object layer with a native implementation is on the roadmap.
+Everything is implemented here, from ISO 32000 directly, with **no
+external dependencies**: the object layer (cross-reference tables and
+streams, object streams, hybrid references, stream filters, and
+standard-handler decryption), the standard font encodings and Adobe Glyph
+List, and everything from the content stream down — lexer, interpreter,
+text state machine, CTM/Form-XObject handling, ToUnicode parsing, CID
+widths.
 
 Undecodable glyphs (no ToUnicode, no standard encoding) are **dropped, not
 emitted as garbage**, so image-only or outlined-text PDFs yield empty
@@ -56,7 +58,10 @@ output you can detect, instead of plausible-looking noise.
   to extract.
 - No layout analysis beyond line/word reconstruction: complex multi-column
   layouts may interleave.
-- Encrypted files are not decrypted.
+- Encrypted files open only when the empty user or owner password unlocks
+  them (RC4, AES-128, AES-256); password-protected files return an error.
+- Image filters (DCT/JPX/CCITT/JBIG2) are not decoded — text extraction
+  never needs them.
 
 ## pdftest
 
@@ -68,4 +73,5 @@ reproduced synthetically, with fuzzing on top.
 
 ## License
 
-MIT. Uses [ledongthuc/pdf](https://github.com/ledongthuc/pdf) (BSD-3-Clause).
+MIT. Embeds the [Adobe Glyph List](https://github.com/adobe-type-tools/agl-aglfn)
+(Apache-2.0) for glyph-name decoding.
