@@ -1,0 +1,5 @@
+* text=auto eol=lf
+
+# Fuzz corpus entries and any future PDF fixtures must be byte-exact.
+testdata/** -text
+*.pdf -text
