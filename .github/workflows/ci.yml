@@ -58,5 +58,21 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
-      - name: fuzz 60s
-        run: go test -fuzz '^FuzzExtract$' -fuzztime 60s .
+      - name: fuzz Extract 60s
+        run: go test -run '^$' -fuzz '^FuzzExtract$' -fuzztime 60s .
+      - name: fuzz Reader 60s
+        run: go test -run '^$' -fuzz '^FuzzReader$' -fuzztime 60s ./internal/object
+
+  benchmarks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: comparison matrix
+        working-directory: benchmarks
+        run: go test -run TestCompetitorComparison -v ./...
+      - name: benchmarks
+        working-directory: benchmarks
+        run: go test -bench . -benchmem -run '^$' ./...

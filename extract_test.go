@@ -273,11 +273,28 @@ func TestExtractContextCancelled(t *testing.T) {
 }
 
 func FuzzExtract(f *testing.F) {
-	f.Add(simpleDoc(`BT /F1 12 Tf 72 720 Td (seed text) Tj ET`))
+	seed := "BT /F1 12 Tf 72 720 Td (seed text) Tj ET"
+	f.Add(simpleDoc(seed))
 	f.Add([]byte("%PDF-1.4 garbage"))
+	f.Add(pdftest.BuildXrefStream(1,
+		pdftest.Catalog(2), pdftest.Pages(3),
+		pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+		pdftest.Stream("", seed), pdftest.Helvetica()))
+	f.Add(pdftest.BuildObjStm(1, []int{1, 2, 3, 5},
+		pdftest.Catalog(2), pdftest.Pages(3),
+		pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+		pdftest.Stream("", seed), pdftest.Helvetica()))
+	f.Add(pdftest.BuildHybrid(1,
+		pdftest.Catalog(2), pdftest.Pages(3),
+		pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+		pdftest.Stream("", seed), pdftest.Helvetica()))
+	f.Add(pdftest.BuildEncrypted(1, pdftest.EncryptSpec{R: 4},
+		pdftest.Catalog(2), pdftest.Pages(3),
+		pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+		pdftest.Stream("", seed), pdftest.Helvetica()))
 	f.Fuzz(func(_ *testing.T, data []byte) {
-		// Extract must never panic or hang: it contains reader panics and
-		// gates the page tree before walking it.
+		// Extract must never panic or hang: the object layer returns errors
+		// rather than panicking, and the page tree is gated before walking.
 		_, _ = Extract(context.Background(), bytes.NewReader(data), int64(len(data)))
 	})
 }

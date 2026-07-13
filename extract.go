@@ -4,30 +4,27 @@
 // plain text by clustering glyphs into lines and inserting word spacing
 // derived from glyph gaps and font metrics.
 //
-// The package implements its own content-stream lexer, interpreter, and
-// font decoding on top of the object-parsing primitives of
-// github.com/ledongthuc/pdf (BSD-3-Clause). That library's built-in text
-// extraction has gaps that matter on real-world files: it never descends
-// into Form XObjects (losing all text in e.g. Google Docs exports), it
-// ignores /ToUnicode when an /Encoding dictionary is present, it tracks
-// positions only through the Tm operator, its lexer spins forever on
-// tokens that straddle /Contents array segments, and it has no defenses
-// against decompression bombs, stalled filter chains, or cyclic page
-// trees. This package addresses all of the above and is validated against
-// corpora of real-world documents; replacing the remaining object layer
-// with a native implementation is on the roadmap.
+// The package is pure Go with no external dependencies. It implements the
+// PDF object layer (cross-reference tables and streams, object streams,
+// stream filters, and standard-handler decryption) natively per ISO
+// 32000, and on top of it a content-stream lexer, interpreter, and font
+// decoder tuned for real-world files: it descends into Form XObjects
+// (where e.g. Google Docs exports keep their text), honors /ToUnicode
+// even alongside an /Encoding dictionary, tracks positions through every
+// text operator, never loops on tokens straddling /Contents array
+// segments, and defends against decompression bombs, stalled filter
+// chains, and cyclic page trees.
 package pdf
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"sort"
 	"strings"
 
-	ldpdf "github.com/ledongthuc/pdf"
+	"github.com/giraffesyo/pdf/internal/object"
 )
 
 // Glyph is one decoded glyph (or glyph cluster) with its position in
@@ -52,32 +49,28 @@ type Document struct {
 // Extract parses the PDF in r and extracts every page's glyphs. Malformed
 // pages yield whatever was decoded before the failure; a malformed file
 // returns an error. The context is checked between pages.
-func Extract(ctx context.Context, r io.ReaderAt, size int64) (doc *Document, err error) {
-	// The underlying reader panics on malformed input; contain it.
-	defer func() {
-		if rec := recover(); rec != nil {
-			doc, err = nil, fmt.Errorf("pdf: parse failure: %v", rec)
-		}
-	}()
-	reader, err := ldpdf.NewReader(r, size)
+func Extract(ctx context.Context, r io.ReaderAt, size int64) (*Document, error) {
+	reader, err := object.NewReader(r, size)
 	if err != nil {
 		return nil, err
 	}
-	// Reject cyclic/oversized page trees before Page() walks them: the
-	// library's own walk would overflow the stack, which recover() cannot
-	// contain.
+	// Reject cyclic/oversized page trees before walking them.
 	n, err := countPages(reader)
 	if err != nil {
 		return nil, err
 	}
-	n = min(n, reader.NumPage())
-	doc = &Document{Pages: make([]Page, 0, n)}
+	// NumPages reads /Count, which a malformed file may make negative or
+	// huge; countPages bounds the real leaf count, so clamp between them.
+	if np := reader.NumPages(); np >= 0 && np < n {
+		n = np
+	}
+	doc := &Document{Pages: make([]Page, 0, n)}
 	for i := 1; i <= n; i++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		page := reader.Page(i)
-		if page.V.IsNull() {
+		if page.IsNull() {
 			continue
 		}
 		doc.Pages = append(doc.Pages, Page{Glyphs: extractPage(page)})
@@ -152,17 +145,16 @@ func (p Page) Text() string {
 }
 
 // countPages validates the document's page tree and returns its leaf page
-// count. It exists because the underlying library walks the tree with
-// unbounded recursion: a corrupt or malicious file with a self-referencing
-// /Kids entry would overflow the stack (unrecoverable).
-func countPages(r *ldpdf.Reader) (int, error) {
+// count, rejecting cyclic or oversized trees before the page walk visits
+// them.
+func countPages(r *object.Reader) (int, error) {
 	const (
 		maxDepth = 64
 		maxNodes = 50000
 	)
 	nodes := 0
-	var walk func(v ldpdf.Value, depth int) (int, error)
-	walk = func(v ldpdf.Value, depth int) (int, error) {
+	var walk func(v object.Value, depth int) (int, error)
+	walk = func(v object.Value, depth int) (int, error) {
 		if depth > maxDepth {
 			return 0, errors.New("pdf: page tree too deep (possible reference cycle)")
 		}
@@ -192,10 +184,10 @@ func countPages(r *ldpdf.Reader) (int, error) {
 // extractPage walks a page's content streams, including nested Form
 // XObjects. Malformed streams yield whatever was decoded before the
 // failure.
-func extractPage(p ldpdf.Page) []Glyph {
+func extractPage(p object.Value) []Glyph {
 	w := &walker{}
-	res := p.Resources()
-	w.walkStream(p.V.Key("Contents"), res, gstate{ctm: identity, hscale: 1})
+	res := object.Inherited(p, "Resources")
+	w.walkStream(p.Key("Contents"), res, gstate{ctm: identity, hscale: 1})
 	return w.glyphs
 }
 
@@ -255,10 +247,11 @@ type walker struct {
 	ops    int
 }
 
-func (w *walker) walkStream(strm, resources ldpdf.Value, gs gstate) {
-	// The interpreter panics on malformed streams and unsupported filters;
-	// keep whatever was extracted up to that point. The budget sentinel
-	// must keep unwinding to the top-level call.
+func (w *walker) walkStream(strm, resources object.Value, gs gstate) {
+	// The per-page work budget aborts by panicking errBudgetExceeded; it
+	// must keep unwinding through nested Form XObjects to the top-level
+	// call, where it is swallowed. (The object layer returns errors rather
+	// than panicking, so nothing else reaches here.)
 	defer func() {
 		//nolint:errorlint // identity comparison on a recovered sentinel, never wrapped
 		if r := recover(); r != nil && r == errBudgetExceeded && w.depth > 0 {
@@ -391,19 +384,19 @@ func (w *walker) walkStream(strm, resources ldpdf.Value, gs gstate) {
 				break
 			}
 			xobj := resources.Key("XObject").Key(args[0].name)
-			if xobj.Kind() != ldpdf.Stream || xobj.Key("Subtype").Name() != "Form" {
+			if xobj.Kind() != object.Stream || xobj.Key("Subtype").Name() != "Form" {
 				break
 			}
 			sub := gs
-			if m := xobj.Key("Matrix"); m.Kind() == ldpdf.Array && m.Len() == 6 {
+			if m := xobj.Key("Matrix"); m.Kind() == object.Array && m.Len() == 6 {
 				var fm matrix
 				for i := range fm {
-					fm[i] = m.Index(i).Float64()
+					fm[i], _ = m.Index(i).Float64()
 				}
 				sub.ctm = mul(fm, gs.ctm)
 			}
 			subRes := xobj.Key("Resources")
-			if subRes.Kind() != ldpdf.Dict {
+			if subRes.Kind() != object.Dict {
 				subRes = resources
 			}
 			w.depth++

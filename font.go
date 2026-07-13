@@ -1,12 +1,15 @@
 package pdf
 
-import ldpdf "github.com/ledongthuc/pdf"
+import (
+	"github.com/giraffesyo/pdf/internal/encoding"
+	"github.com/giraffesyo/pdf/internal/object"
+)
 
 // fontInfo wraps one font dictionary with decode and width lookups.
 type fontInfo struct {
 	twoByte  bool               // Type0 composite font: 2-byte codes
 	toUni    map[uint32]string  // ToUnicode CMap, checked first
-	fallback ldpdf.TextEncoding // library encoder (WinAnsi/MacRoman/Differences/...)
+	fallback *encoding.Encoding // simple-font encoding (WinAnsi/MacRoman/Differences/...)
 
 	firstChar int
 	widths    []float64          // simple fonts: indexed by code-firstChar
@@ -14,20 +17,20 @@ type fontInfo struct {
 	defWidth  float64
 }
 
-func loadFont(cache map[string]*fontInfo, resources ldpdf.Value, name string) *fontInfo {
+func loadFont(cache map[string]*fontInfo, resources object.Value, name string) *fontInfo {
 	if f, ok := cache[name]; ok {
 		return f
 	}
 	fv := resources.Key("Font").Key(name)
 	var f *fontInfo
-	if fv.Kind() == ldpdf.Dict {
+	if fv.Kind() == object.Dict {
 		f = newFontInfo(fv)
 	}
 	cache[name] = f
 	return f
 }
 
-func newFontInfo(fv ldpdf.Value) *fontInfo {
+func newFontInfo(fv object.Value) *fontInfo {
 	f := &fontInfo{defWidth: 500}
 	f.toUni = parseToUnicode(fv.Key("ToUnicode"))
 
@@ -35,16 +38,16 @@ func newFontInfo(fv ldpdf.Value) *fontInfo {
 		f.twoByte = true
 		f.defWidth = 1000
 		desc := fv.Key("DescendantFonts").Index(0)
-		if desc.Kind() == ldpdf.Dict {
-			if dw := desc.Key("DW"); dw.Kind() == ldpdf.Integer || dw.Kind() == ldpdf.Real {
-				f.defWidth = dw.Float64()
+		if desc.Kind() == object.Dict {
+			if dw, ok := desc.Key("DW").Float64(); ok {
+				f.defWidth = dw
 			}
 			f.cidWidths = parseCIDWidths(desc.Key("W"))
 		}
 		return f
 	}
 
-	// Simple font: /FirstChar + /Widths, library encoder as fallback.
+	// Simple font: /FirstChar + /Widths, standard encoding as fallback.
 	// Exception: a Type3 font without ToUnicode draws glyph procedures
 	// addressed by arbitrary codes; no encoding fallback can recover text,
 	// and passing raw codes through produces convincing-looking garbage.
@@ -52,24 +55,95 @@ func newFontInfo(fv ldpdf.Value) *fontInfo {
 	if fv.Key("Subtype").Name() == "Type3" && f.toUni == nil {
 		return f
 	}
-	f.fallback = ldpdf.Font{V: fv}.Encoder()
-	f.firstChar = int(fv.Key("FirstChar").Int64())
-	if wArr := fv.Key("Widths"); wArr.Kind() == ldpdf.Array {
+	f.fallback = fallbackEncoding(fv)
+	f.firstChar = int(intOr(fv.Key("FirstChar"), 0))
+	if wArr := fv.Key("Widths"); wArr.Kind() == object.Array {
 		f.widths = make([]float64, wArr.Len())
 		for i := range f.widths {
-			f.widths[i] = wArr.Index(i).Float64()
+			f.widths[i], _ = wArr.Index(i).Float64()
 		}
 	}
-	if mw := fv.Key("FontDescriptor").Key("MissingWidth"); mw.Kind() == ldpdf.Integer || mw.Kind() == ldpdf.Real {
-		f.defWidth = mw.Float64()
+	if mw, ok := fv.Key("FontDescriptor").Key("MissingWidth").Float64(); ok {
+		f.defWidth = mw
 	}
 	return f
 }
 
+// intOr returns the value's integer, or d for non-integers.
+func intOr(v object.Value, d int64) int64 {
+	if n, ok := v.Int64(); ok {
+		return n
+	}
+	return d
+}
+
+// fallbackEncoding builds a simple font's code→text fallback from its
+// /Encoding entry per ISO 32000-1 §9.6.5: a base encoding name, or a
+// dictionary carrying /BaseEncoding and /Differences, or — when absent —
+// StandardEncoding for nonsymbolic fonts. Symbolic fonts (descriptor flag
+// 3 set, flag 6 clear) keep their built-in encoding, which lives inside
+// the font program; without parsing it only printable ASCII passes
+// through, and high bytes drop honestly.
+func fallbackEncoding(fv object.Value) *encoding.Encoding {
+	enc := fv.Key("Encoding")
+	if enc.Kind() == object.Dict {
+		base := enc.Key("BaseEncoding").Name()
+		switch base {
+		case "WinAnsiEncoding", "MacRomanEncoding":
+		default:
+			base = "StandardEncoding"
+		}
+		return encoding.New(base, parseDifferences(enc.Key("Differences")))
+	}
+	switch name := enc.Name(); name {
+	case "WinAnsiEncoding", "MacRomanEncoding":
+		return encoding.New(name, nil)
+	case "":
+		if symbolicFont(fv) {
+			return encoding.New("", nil) // ASCII passthrough
+		}
+		return encoding.New("StandardEncoding", nil)
+	default:
+		return encoding.New("", nil) // unrecognized named encoding
+	}
+}
+
+// parseDifferences reads a /Differences array — integers set the current
+// code, names assign consecutive codes — resolving glyph names to text.
+func parseDifferences(arr object.Value) map[byte]string {
+	if arr.Kind() != object.Array {
+		return nil
+	}
+	var m map[byte]string
+	code := -1
+	for i := range arr.Len() {
+		el := arr.Index(i)
+		switch el.Kind() {
+		case object.Integer:
+			n, _ := el.Int64()
+			code = int(n)
+		case object.Name:
+			if code >= 0 && code <= 0xFF {
+				if m == nil {
+					m = map[byte]string{}
+				}
+				m[byte(code)] = encoding.GlyphToText(el.Name())
+			}
+			code++
+		}
+	}
+	return m
+}
+
+func symbolicFont(fv object.Value) bool {
+	flags := intOr(fv.Key("FontDescriptor").Key("Flags"), 0)
+	return flags&4 != 0 && flags&32 == 0
+}
+
 // parseCIDWidths reads a CIDFont /W array: sequences of either
 // "c [w1 w2 ...]" or "cFirst cLast w".
-func parseCIDWidths(w ldpdf.Value) map[uint32]float64 {
-	if w.Kind() != ldpdf.Array {
+func parseCIDWidths(w object.Value) map[uint32]float64 {
+	if w.Kind() != object.Array {
 		return nil
 	}
 	out := map[uint32]float64{}
@@ -80,18 +154,18 @@ func parseCIDWidths(w ldpdf.Value) map[uint32]float64 {
 		}
 		next := w.Index(i + 1)
 		switch next.Kind() {
-		case ldpdf.Array:
-			start := clampCID(c.Int64())
+		case object.Array:
+			start := clampCID(intOr(c, 0))
 			for j := 0; j < next.Len() && j < 65536; j++ {
-				out[start+uint32(j)] = next.Index(j).Float64()
+				out[start+uint32(j)], _ = next.Index(j).Float64()
 			}
 			i += 2
-		case ldpdf.Integer, ldpdf.Real:
+		case object.Integer, object.Real:
 			if i+2 >= w.Len() {
 				return out
 			}
-			lo, hi := clampCID(c.Int64()), clampCID(next.Int64())
-			width := w.Index(i + 2).Float64()
+			lo, hi := clampCID(intOr(c, 0)), clampCID(intOr(next, 0))
+			width, _ := w.Index(i + 2).Float64()
 			if hi-lo < 65536 {
 				for code := lo; code <= hi; code++ {
 					out[code] = width
@@ -133,7 +207,7 @@ func (f *fontInfo) decode(raw string) []decoded {
 		for i := 0; i+1 < len(raw); i += 2 {
 			code := uint32(raw[i])<<8 | uint32(raw[i+1])
 			out = append(out, decoded{
-				text:  f.mapCode(code, raw[i:i+2]),
+				text:  f.mapCode(code),
 				width: f.cidWidth(code),
 			})
 		}
@@ -142,7 +216,7 @@ func (f *fontInfo) decode(raw string) []decoded {
 	for i := range len(raw) {
 		code := uint32(raw[i])
 		out = append(out, decoded{
-			text:  f.mapCode(code, raw[i:i+1]),
+			text:  f.mapCode(code),
 			width: f.simpleWidth(int(code)),
 			space: raw[i] == ' ',
 		})
@@ -150,14 +224,15 @@ func (f *fontInfo) decode(raw string) []decoded {
 	return out
 }
 
-// mapCode decodes one character code: ToUnicode wins, then the library
-// encoder, then U+FFFD (stripped later).
-func (f *fontInfo) mapCode(code uint32, rawBytes string) string {
+// mapCode decodes one character code: ToUnicode wins, then the simple-font
+// encoding fallback (single-byte codes only — Type0 fonts never set one),
+// then U+FFFD (stripped later).
+func (f *fontInfo) mapCode(code uint32) string {
 	if s, ok := f.toUni[code]; ok {
 		return s
 	}
-	if f.fallback != nil {
-		return f.fallback.Decode(rawBytes)
+	if f.fallback != nil && code <= 0xFF {
+		return f.fallback.Decode(byte(code))
 	}
 	return "�"
 }
