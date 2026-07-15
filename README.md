@@ -76,10 +76,11 @@ whether extraction completes safely. A comparator that returns incorrect
 text, errors, or panics is excluded from the performance run for that
 fixture.
 
-Results below were measured on 2026-07-13 at commit `07f0abd`, using Go
-`1.26.1` on macOS `26.5.1` (`darwin/arm64`, Apple M5 Pro). Values are one
-run of `go test -bench . -benchmem -run '^$' -count=1 ./...`; rerun on your
-own hardware before making a performance decision.
+Results below were measured on 2026-07-15 from the current worktree based
+on commit `4d13aa9`, using Go `1.26.4` on macOS `26.5.1` (`darwin/arm64`,
+Apple M5 Pro). Values are one run of
+`go test -bench . -benchmem -run '^$' -count=1 ./...`; rerun on your own
+hardware before making a performance decision.
 
 | Corpus | this package | ledongthuc/pdf | rsc.io/pdf |
 |---|---:|---:|---:|
@@ -94,23 +95,23 @@ Latency (`ns/op`):
 
 | Corpus | this package | ledongthuc/pdf |
 |---|---:|---:|
-| simple | 31,667 | 25,435 |
-| Form XObject | 48,147 | incorrect text |
-| Flate content | 43,569 | 38,655 |
-| xref stream | 50,425 | 24,787 |
-| object stream | 47,989 | 42,815 |
-| RC4-encrypted | 76,025 | unsupported |
+| simple | 12,548 | 29,796 |
+| Form XObject | 15,342 | incorrect text |
+| Flate content | 20,080 | 41,339 |
+| xref stream | 13,168 | 26,940 |
+| object stream | 19,330 | 47,061 |
+| RC4-encrypted | 61,169 | unsupported |
 
 Memory (`B/op`) and allocations (`allocs/op`):
 
 | Corpus | this package B/op | ledongthuc/pdf B/op | this package allocs/op | ledongthuc/pdf allocs/op |
 |---|---:|---:|---:|---:|
-| simple | 120,690 | 62,960 | 175 | 368 |
-| Form XObject | 190,090 | incorrect text | 222 | incorrect text |
-| Flate content | 166,050 | 107,888 | 193 | 386 |
-| xref stream | 186,681 | 62,880 | 180 | 365 |
-| object stream | 252,473 | 100,336 | 200 | 541 |
-| RC4-encrypted | 218,257 | unsupported | 338 | unsupported |
+| simple | 53,120 | 62,963 | 153 | 368 |
+| Form XObject | 57,480 | incorrect text | 198 | incorrect text |
+| Flate content | 98,553 | 107,891 | 171 | 386 |
+| xref stream | 54,008 | 62,882 | 157 | 365 |
+| object stream | 54,530 | 100,340 | 176 | 541 |
+| RC4-encrypted | 85,727 | unsupported | 315 | unsupported |
 
 To reproduce the support matrix and performance measurements:
 

@@ -1,6 +1,8 @@
 package pdf
 
 import (
+	"slices"
+
 	"github.com/giraffesyo/pdf/internal/encoding"
 	"github.com/giraffesyo/pdf/internal/object"
 )
@@ -197,31 +199,37 @@ type decoded struct {
 	space bool    // single-byte code 32: word spacing applies
 }
 
-// decode splits raw string bytes into per-code decoded glyphs.
-func (f *fontInfo) decode(raw string) []decoded {
+// appendDecoded splits raw string bytes into per-code decoded glyphs and
+// appends them to dst.
+func (f *fontInfo) appendDecoded(dst []decoded, raw []byte) []decoded {
 	if f == nil {
-		return nil
+		return dst
 	}
-	var out []decoded
+	n := len(raw)
+	if f.twoByte {
+		n /= 2
+	}
+	dst = slices.Grow(dst, n)
+
 	if f.twoByte {
 		for i := 0; i+1 < len(raw); i += 2 {
 			code := uint32(raw[i])<<8 | uint32(raw[i+1])
-			out = append(out, decoded{
+			dst = append(dst, decoded{
 				text:  f.mapCode(code),
 				width: f.cidWidth(code),
 			})
 		}
-		return out
+		return dst
 	}
-	for i := range len(raw) {
+	for i := range raw {
 		code := uint32(raw[i])
-		out = append(out, decoded{
+		dst = append(dst, decoded{
 			text:  f.mapCode(code),
 			width: f.simpleWidth(int(code)),
 			space: raw[i] == ' ',
 		})
 	}
-	return out
+	return dst
 }
 
 // mapCode decodes one character code: ToUnicode wins, then the simple-font

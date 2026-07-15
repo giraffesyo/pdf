@@ -21,7 +21,7 @@ import (
 	"errors"
 	"io"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/giraffesyo/pdf/internal/object"
@@ -81,13 +81,16 @@ func Extract(ctx context.Context, r io.ReaderAt, size int64) (*Document, error) 
 // Text reconstructs the whole document's plain text: pages separated by
 // blank lines, empty pages skipped.
 func (d *Document) Text() string {
-	var pages []string
+	var b strings.Builder
 	for _, p := range d.Pages {
 		if t := p.Text(); t != "" {
-			pages = append(pages, t)
+			if b.Len() > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(t)
 		}
 	}
-	return strings.Join(pages, "\n\n")
+	return b.String()
 }
 
 // Text reconstructs a page's plain text from glyph positions: glyphs are
@@ -102,30 +105,56 @@ func (p Page) Text() string {
 	// Cluster into lines by Y (PDF Y grows upward). The tolerance is
 	// generous enough to pull superscripts/subscripts into their line but
 	// far smaller than typical line leading (~1.2em).
-	sorted := make([]Glyph, len(glyphs))
-	copy(sorted, glyphs)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Y > sorted[j].Y })
+	sorted := slices.Clone(glyphs)
+	slices.SortStableFunc(sorted, func(a, b Glyph) int {
+		switch {
+		case a.Y > b.Y:
+			return -1
+		case a.Y < b.Y:
+			return 1
+		default:
+			return 0
+		}
+	})
 	var lines [][]Glyph
-	lineY := 0.0
-	for _, g := range sorted {
+	lineStart := 0
+	lineY := sorted[0].Y
+	for i := 1; i < len(sorted); i++ {
+		g := sorted[i]
 		tol := 0.55 * g.Size
 		if tol <= 0 {
 			tol = 5
 		}
-		if len(lines) == 0 || lineY-g.Y > tol {
-			lines = append(lines, nil)
+		if lineY-g.Y > tol {
+			lines = append(lines, sorted[lineStart:i])
+			lineStart = i
 			lineY = g.Y
 		}
-		lines[len(lines)-1] = append(lines[len(lines)-1], g)
 	}
+	lines = append(lines, sorted[lineStart:])
 
 	var b strings.Builder
+	textBytes := 0
+	for _, g := range glyphs {
+		textBytes += len(g.Text)
+	}
+	b.Grow(textBytes + len(glyphs) + len(lines) - 1)
 	for li, line := range lines {
 		if li > 0 {
 			b.WriteByte('\n')
 		}
-		sort.SliceStable(line, func(i, j int) bool { return line[i].X < line[j].X })
+		slices.SortStableFunc(line, func(a, b Glyph) int {
+			switch {
+			case a.X < b.X:
+				return -1
+			case a.X > b.X:
+				return 1
+			default:
+				return 0
+			}
+		})
 		prevEnd := 0.0
+		endsSpace := false
 		for gi, g := range line {
 			if gi > 0 {
 				gap := g.X - prevEnd
@@ -133,11 +162,16 @@ func (p Page) Text() string {
 				if thresh <= 0 {
 					thresh = 1
 				}
-				if gap > thresh && !strings.HasSuffix(b.String(), " ") && !strings.HasPrefix(g.Text, " ") {
+				startsSpace := len(g.Text) > 0 && g.Text[0] == ' '
+				if gap > thresh && !endsSpace && !startsSpace {
 					b.WriteByte(' ')
+					endsSpace = true
 				}
 			}
 			b.WriteString(g.Text)
+			if g.Text != "" {
+				endsSpace = g.Text[len(g.Text)-1] == ' '
+			}
 			prevEnd = g.X + g.Advance
 		}
 	}
@@ -207,7 +241,13 @@ func mul(m, n matrix) matrix {
 	}
 }
 
-func translate(tx, ty float64) matrix { return matrix{1, 0, 0, 1, tx, ty} }
+// translated returns translate(tx, ty) × m without multiplying the four
+// unchanged linear terms.
+func translated(m matrix, tx, ty float64) matrix {
+	m[4] += tx*m[0] + ty*m[2]
+	m[5] += tx*m[1] + ty*m[3]
+	return m
+}
 
 func scaleX(m matrix) float64 { return math.Hypot(m[0], m[1]) }
 func scaleY(m matrix) float64 { return math.Hypot(m[2], m[3]) }
@@ -261,15 +301,18 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) {
 
 	fonts := map[string]*fontInfo{}
 	var gsStack []gstate
+	var decodedBuf []decoded
 	tm, tlm := identity, identity
 
-	show := func(raw string) {
+	show := func(raw []byte) {
 		f := gs.font
 		if f == nil {
 			return
 		}
-		for _, d := range f.decode(raw) {
-			trm := mul(tm, gs.ctm)
+		decodedBuf = f.appendDecoded(decodedBuf[:0], raw)
+		trm := mul(tm, gs.ctm)
+		xScale, yScale := scaleX(trm), scaleY(trm)
+		for _, d := range decodedBuf {
 			adv := (d.width/1000*gs.fontSize + gs.charSp) * gs.hscale
 			if d.space {
 				adv += gs.wordSp * gs.hscale
@@ -278,20 +321,21 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) {
 				w.glyphs = append(w.glyphs, Glyph{
 					Text:    text,
 					X:       trm[4],
-					Y:       trm[5] + gs.rise*scaleY(trm),
-					Advance: adv * scaleX(trm),
-					Size:    math.Abs(gs.fontSize) * scaleY(trm),
+					Y:       trm[5] + gs.rise*yScale,
+					Advance: adv * xScale,
+					Size:    math.Abs(gs.fontSize) * yScale,
 				})
 			}
-			tm = mul(translate(adv, 0), tm)
+			tm = translated(tm, adv, 0)
+			trm = translated(trm, adv, 0)
 		}
 	}
 
-	interpretContent(contentBytes(strm), func(op string, args []operand) {
+	interpretContent(contentBytes(strm), func(op []byte, args []operand) {
 		if w.ops++; w.ops > maxOpsPerPage || len(w.glyphs) > maxGlyphsPerPage {
 			panic(errBudgetExceeded)
 		}
-		switch op {
+		switch string(op) {
 		case "q":
 			gsStack = append(gsStack, gs)
 		case "Q":
@@ -312,13 +356,13 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) {
 			}
 		case "Td":
 			if len(args) == 2 {
-				tlm = mul(translate(args[0].num, args[1].num), tlm)
+				tlm = translated(tlm, args[0].num, args[1].num)
 				tm = tlm
 			}
 		case "TD":
 			if len(args) == 2 {
 				gs.leading = -args[1].num
-				tlm = mul(translate(args[0].num, args[1].num), tlm)
+				tlm = translated(tlm, args[0].num, args[1].num)
 				tm = tlm
 			}
 		case "Tm":
@@ -327,7 +371,7 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) {
 				tm = tlm
 			}
 		case "T*":
-			tlm = mul(translate(0, -gs.leading), tlm)
+			tlm = translated(tlm, 0, -gs.leading)
 			tm = tlm
 		case "TL":
 			if len(args) == 1 {
@@ -351,31 +395,31 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) {
 			}
 		case "Tj":
 			if len(args) == 1 {
-				show(string(args[0].str))
+				show(args[0].str)
 			}
 		case "'":
 			if len(args) == 1 {
-				tlm = mul(translate(0, -gs.leading), tlm)
+				tlm = translated(tlm, 0, -gs.leading)
 				tm = tlm
-				show(string(args[0].str))
+				show(args[0].str)
 			}
 		case "\"":
 			if len(args) == 3 {
 				gs.wordSp = args[0].num
 				gs.charSp = args[1].num
-				tlm = mul(translate(0, -gs.leading), tlm)
+				tlm = translated(tlm, 0, -gs.leading)
 				tm = tlm
-				show(string(args[2].str))
+				show(args[2].str)
 			}
 		case "TJ":
 			if len(args) == 1 && args[0].kind == opArr {
 				for _, el := range args[0].arr {
 					switch el.kind {
 					case opStr:
-						show(string(el.str))
+						show(el.str)
 					case opNum:
 						adv := -el.num / 1000 * gs.fontSize * gs.hscale
-						tm = mul(translate(adv, 0), tm)
+						tm = translated(tm, adv, 0)
 					}
 				}
 			}
