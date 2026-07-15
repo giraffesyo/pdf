@@ -1,6 +1,7 @@
 package pdf
 
 import (
+	"bytes"
 	"strconv"
 
 	"github.com/giraffesyo/pdf/internal/object"
@@ -46,6 +47,10 @@ const (
 // otherwise loop io.ReadAll forever). A non-stream value, or a stream
 // whose filter chain errors, yields nil.
 func readStreamBounded(v object.Value) []byte {
+	return readStreamBoundedLimit(v, maxStreamBytes)
+}
+
+func readStreamBoundedLimit(v object.Value, limit int) []byte {
 	if v.Kind() != object.Stream {
 		return nil
 	}
@@ -54,21 +59,31 @@ func readStreamBounded(v object.Value) []byte {
 		return nil
 	}
 	defer func() { _ = rc.Close() }() // read-only handle
-	return safeio.ReadAllGuarded(rc)
+	return safeio.ReadAllGuardedLimit(rc, limit)
 }
 
 // contentBytes returns the page's full content: /Contents may be a single
 // stream or an array of streams that form one logical stream.
 func contentBytes(contents object.Value) []byte {
+	return contentBytesLimit(contents, maxStreamBytes)
+}
+
+func contentBytesLimit(contents object.Value, limit int) []byte {
+	if limit <= 0 {
+		return nil
+	}
 	if contents.Kind() == object.Array {
 		var data []byte
-		for i := 0; i < contents.Len() && len(data) < maxStreamBytes; i++ {
-			data = append(data, readStreamBounded(contents.Index(i))...)
-			data = append(data, '\n')
+		for i := 0; i < contents.Len() && len(data) < limit; i++ {
+			remaining := limit - len(data)
+			data = append(data, readStreamBoundedLimit(contents.Index(i), remaining)...)
+			if len(data) < limit {
+				data = append(data, '\n')
+			}
 		}
 		return data
 	}
-	return readStreamBounded(contents)
+	return readStreamBoundedLimit(contents, limit)
 }
 
 type contentLexer struct {
@@ -78,7 +93,7 @@ type contentLexer struct {
 
 // interpretContent executes the operator stream: operands accumulate on a
 // stack; each operator keyword invokes do and clears the stack.
-func interpretContent(data []byte, do func(op string, args []operand)) {
+func interpretContent(data []byte, do func(op []byte, args []operand)) {
 	lx := &contentLexer{data: data}
 	var stack []operand
 	for lx.i < len(lx.data) {
@@ -99,7 +114,7 @@ func interpretContent(data []byte, do func(op string, args []operand)) {
 			lx.i++ // stray closer in malformed content
 		default:
 			kw := lx.readKeyword()
-			switch kw {
+			switch string(kw) {
 			case "":
 				lx.i++
 			case "true", "false":
@@ -148,7 +163,10 @@ func isDelim(c byte) bool {
 // readOperand parses one object starting at the cursor. Returns ok=false
 // only for tokens that produce no value (e.g. a lone ">>").
 func (lx *contentLexer) readOperand(depth int) (operand, bool) {
-	if depth > maxOperandNest || lx.i >= len(lx.data) {
+	if lx.i >= len(lx.data) {
+		return operand{}, false
+	}
+	if depth > maxOperandNest {
 		lx.i++
 		return operand{}, false
 	}
@@ -177,34 +195,25 @@ func (lx *contentLexer) readName() string {
 	for lx.i < len(lx.data) && !isPDFSpace(lx.data[lx.i]) && !isDelim(lx.data[lx.i]) {
 		lx.i++
 	}
-	name := string(lx.data[start:lx.i])
+	raw := lx.data[start:lx.i]
 	// Decode #xx escapes if present.
-	if idx := indexByte(name, '#'); idx >= 0 {
-		var b []byte
-		for j := 0; j < len(name); j++ {
-			if name[j] == '#' && j+2 < len(name) {
-				if hi, ok1 := hexVal(name[j+1]); ok1 {
-					if lo, ok2 := hexVal(name[j+2]); ok2 {
+	if bytes.IndexByte(raw, '#') >= 0 {
+		b := make([]byte, 0, len(raw))
+		for j := 0; j < len(raw); j++ {
+			if raw[j] == '#' && j+2 < len(raw) {
+				if hi, ok1 := hexVal(raw[j+1]); ok1 {
+					if lo, ok2 := hexVal(raw[j+2]); ok2 {
 						b = append(b, hi<<4|lo)
 						j += 2
 						continue
 					}
 				}
 			}
-			b = append(b, name[j])
+			b = append(b, raw[j])
 		}
-		name = string(b)
+		return string(b)
 	}
-	return name
-}
-
-func indexByte(s string, c byte) int {
-	for i := range len(s) {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
+	return string(raw)
 }
 
 func hexVal(c byte) (byte, bool) {
@@ -221,64 +230,84 @@ func hexVal(c byte) (byte, bool) {
 
 func (lx *contentLexer) readLiteralString() []byte {
 	lx.i++ // consume '('
-	var out []byte
+	start := lx.i
+	escaped := false
 	depth := 1
 	for lx.i < len(lx.data) {
-		c := lx.data[lx.i]
-		switch c {
+		switch lx.data[lx.i] {
 		case '\\':
+			escaped = true
 			lx.i++
-			if lx.i >= len(lx.data) {
-				return out
+			if lx.i < len(lx.data) {
+				lx.i++ // escaped delimiters do not affect nesting
 			}
-			e := lx.data[lx.i]
-			switch e {
-			case 'n':
-				out = append(out, '\n')
-			case 'r':
-				out = append(out, '\r')
-			case 't':
-				out = append(out, '\t')
-			case 'b':
-				out = append(out, '\b')
-			case 'f':
-				out = append(out, '\f')
-			case '\n': // line continuation
-			case '\r':
-				if lx.i+1 < len(lx.data) && lx.data[lx.i+1] == '\n' {
-					lx.i++
-				}
-			default:
-				if e >= '0' && e <= '7' { // 1-3 octal digits
-					v := int(e - '0')
-					for k := 0; k < 2 && lx.i+1 < len(lx.data); k++ {
-						nx := lx.data[lx.i+1]
-						if nx < '0' || nx > '7' {
-							break
-						}
-						v = v*8 + int(nx-'0')
-						lx.i++
-					}
-					out = append(out, byte(v))
-				} else {
-					out = append(out, e)
-				}
-			}
-			lx.i++
 		case '(':
 			depth++
-			out = append(out, c)
 			lx.i++
 		case ')':
 			depth--
-			lx.i++
 			if depth == 0 {
-				return out
+				raw := lx.data[start:lx.i]
+				lx.i++
+				if escaped {
+					return decodeLiteralString(raw)
+				}
+				return raw
 			}
-			out = append(out, c)
-		default:
-			out = append(out, c)
 			lx.i++
+		default:
+			lx.i++
+		}
+	}
+	raw := lx.data[start:]
+	if escaped {
+		return decodeLiteralString(raw)
+	}
+	return raw
+}
+
+func decodeLiteralString(raw []byte) []byte {
+	out := make([]byte, 0, len(raw))
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '\\' {
+			out = append(out, raw[i])
+			continue
+		}
+		i++
+		if i >= len(raw) {
+			break
+		}
+		e := raw[i]
+		switch e {
+		case 'n':
+			out = append(out, '\n')
+		case 'r':
+			out = append(out, '\r')
+		case 't':
+			out = append(out, '\t')
+		case 'b':
+			out = append(out, '\b')
+		case 'f':
+			out = append(out, '\f')
+		case '\n': // line continuation
+		case '\r':
+			if i+1 < len(raw) && raw[i+1] == '\n' {
+				i++
+			}
+		default:
+			if e >= '0' && e <= '7' { // 1-3 octal digits
+				v := int(e - '0')
+				for range 2 {
+					if i+1 >= len(raw) || raw[i+1] < '0' || raw[i+1] > '7' {
+						break
+					}
+					v = v*8 + int(raw[i+1]-'0')
+					i++
+				}
+				out = append(out, byte(v))
+			} else {
+				out = append(out, e)
+			}
 		}
 	}
 	return out
@@ -286,22 +315,30 @@ func (lx *contentLexer) readLiteralString() []byte {
 
 func (lx *contentLexer) readHexString() []byte {
 	lx.i++ // consume '<'
-	var digits []byte
+	encodedLen := len(lx.data) - lx.i
+	if end := bytes.IndexByte(lx.data[lx.i:], '>'); end >= 0 {
+		encodedLen = end
+	}
+	out := make([]byte, 0, min((encodedLen+1)/2, 256))
+	var hi byte
+	haveHi := false
 	for lx.i < len(lx.data) && lx.data[lx.i] != '>' {
-		if _, ok := hexVal(lx.data[lx.i]); ok {
-			digits = append(digits, lx.data[lx.i])
+		if v, ok := hexVal(lx.data[lx.i]); ok {
+			if haveHi {
+				out = append(out, hi<<4|v)
+				haveHi = false
+			} else {
+				hi = v
+				haveHi = true
+			}
 		}
 		lx.i++
 	}
-	lx.i++ // consume '>'
-	if len(digits)%2 == 1 {
-		digits = append(digits, '0')
+	if lx.i < len(lx.data) {
+		lx.i++ // consume '>'
 	}
-	out := make([]byte, len(digits)/2)
-	for j := range out {
-		hi, _ := hexVal(digits[2*j])
-		lo, _ := hexVal(digits[2*j+1])
-		out[j] = hi<<4 | lo
+	if haveHi {
+		out = append(out, hi<<4)
 	}
 	return out
 }
@@ -394,15 +431,15 @@ func (lx *contentLexer) readNumber() (operand, bool) {
 	return operand{kind: opNum, num: f}, true
 }
 
-func (lx *contentLexer) readKeyword() string {
+func (lx *contentLexer) readKeyword() []byte {
 	start := lx.i
 	for lx.i < len(lx.data) && !isPDFSpace(lx.data[lx.i]) && !isDelim(lx.data[lx.i]) {
 		lx.i++
 	}
 	if lx.i == start {
-		return ""
+		return nil
 	}
-	return string(lx.data[start:lx.i])
+	return lx.data[start:lx.i]
 }
 
 // skipInlineImage consumes everything from after BI through the EI marker:
@@ -417,7 +454,7 @@ func (lx *contentLexer) skipInlineImage() {
 		before := lx.i
 		if lx.data[lx.i] == '/' || lx.data[lx.i] == '(' || lx.data[lx.i] == '<' || lx.data[lx.i] == '[' {
 			lx.readOperand(0)
-		} else if kw := lx.readKeyword(); kw == "ID" {
+		} else if kw := lx.readKeyword(); len(kw) == 2 && kw[0] == 'I' && kw[1] == 'D' {
 			lx.i++ // the single whitespace byte after ID
 			break
 		}

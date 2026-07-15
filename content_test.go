@@ -1,9 +1,11 @@
 package pdf
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
+	"github.com/giraffesyo/pdf/internal/object"
 	"github.com/giraffesyo/pdf/internal/safeio"
 	"github.com/giraffesyo/pdf/pdftest"
 )
@@ -36,6 +38,24 @@ func TestContentsArraySplitToken(t *testing.T) {
 	lines := lineText(extract(t, doc)) // must terminate, not hang
 	if len(lines) != 1 || !strings.Contains(lines[0], "first") || !strings.Contains(lines[0], "second") {
 		t.Errorf("lines = %q, want both halves of the split TJ array", lines)
+	}
+}
+
+func TestContentsArrayTotalSizeLimit(t *testing.T) {
+	doc := pdftest.Build(1,
+		pdftest.Catalog(2),
+		pdftest.Pages(3),
+		pdftest.PageContentsArray(2, "<< >>", 4, 5),
+		pdftest.Stream("", "abc"),
+		pdftest.Stream("", "def"),
+	)
+	r, err := object.NewReader(bytes.NewReader(doc), int64(len(doc)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := contentBytesLimit(r.Page(1).Key("Contents"), 5)
+	if string(got) != "abc\nd" {
+		t.Fatalf("contentBytesLimit() = %q, want %q", got, "abc\nd")
 	}
 }
 
@@ -119,7 +139,7 @@ func TestLexerNeverLoops(_ *testing.T) {
 	}
 	for _, c := range cases {
 		// Termination is the assertion: a loop would hang the test.
-		interpretContent([]byte(c), func(string, []operand) {})
+		interpretContent([]byte(c), func([]byte, []operand) {})
 	}
 }
 
