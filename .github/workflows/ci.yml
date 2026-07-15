@@ -74,5 +74,45 @@ jobs:
         working-directory: benchmarks
         run: go test -run TestCompetitorComparison -v ./...
       - name: benchmarks
+        if: github.event_name != 'pull_request'
         working-directory: benchmarks
         run: go test -bench . -benchmem -run '^$' ./...
+      - name: check out pull request base
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: benchmark-base
+      - name: benchmark base
+        if: github.event_name == 'pull_request'
+        working-directory: benchmark-base/benchmarks
+        run: go test -bench '^BenchmarkExtract$/^giraffesyo$' -benchmem -run '^$' -count=1 ./... | tee "$GITHUB_WORKSPACE/base-bench.txt"
+      - name: record base benchmark
+        if: github.event_name == 'pull_request'
+        uses: benchmark-action/github-action-benchmark@v1.22.1
+        with:
+          name: PDF extraction
+          tool: go
+          output-file-path: base-bench.txt
+          external-data-json-path: ${{ runner.temp }}/benchmark-data.json
+          skip-fetch-gh-pages: true
+      - name: benchmark pull request
+        if: github.event_name == 'pull_request'
+        working-directory: benchmarks
+        run: go test -bench '^BenchmarkExtract$/^giraffesyo$' -benchmem -run '^$' -count=1 ./... | tee "$GITHUB_WORKSPACE/head-bench.txt"
+      - name: check for benchmark regressions
+        if: github.event_name == 'pull_request'
+        uses: benchmark-action/github-action-benchmark@v1.22.1
+        with:
+          name: PDF extraction
+          tool: go
+          output-file-path: head-bench.txt
+          external-data-json-path: ${{ runner.temp }}/benchmark-data.json
+          save-data-file: false
+          # Hosted runners commonly vary by 10–20%; alert above that range
+          # and fail only when the same-run result regresses by at least 25%.
+          alert-threshold: "120%"
+          fail-threshold: "125%"
+          fail-on-alert: true
+          summary-always: true
+          skip-fetch-gh-pages: true
