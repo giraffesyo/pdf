@@ -54,6 +54,11 @@ Undecodable glyphs (no ToUnicode, no standard encoding) are **dropped, not
 emitted as garbage**, so image-only or outlined-text PDFs yield empty
 output you can detect, instead of plausible-looking noise.
 
+Ligature presentation forms (`ﬁ`, `ﬂ`, `ﬀ`, `ﬃ`, `ﬄ`, `ﬅ`, `ﬆ`) — which
+TeX-generated PDFs reach through `/Differences` glyph names — fold to their
+letter sequences, as `pdftotext` and pdf.js do, so extracted text stays
+searchable.
+
 ## Limitations
 
 - No OCR: scanned pages and text converted to vector outlines have no text
