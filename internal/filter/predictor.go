@@ -50,6 +50,13 @@ type predictorReader struct {
 	err  error
 }
 
+// Release forwards to the wrapped decompressor, if pooled.
+func (pr *predictorReader) Release() {
+	if r, ok := pr.src.(Releaser); ok {
+		r.Release()
+	}
+}
+
 func (pr *predictorReader) Read(p []byte) (int, error) {
 	if pr.pos == len(pr.row) {
 		if pr.err != nil {

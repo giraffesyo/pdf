@@ -54,7 +54,7 @@ func ReadAllGuardedLimitError(r io.Reader, limit int) ([]byte, error) {
 			}
 			n, err = r.Read(probe)
 			if n > 0 {
-				capacity := min(max(2*cap(out), 32<<10), limit)
+				capacity := min(max(2*cap(out), 4<<10), limit)
 				grown := make([]byte, len(out), capacity)
 				copy(grown, out)
 				out = grown

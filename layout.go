@@ -68,8 +68,12 @@ func buildLayoutLines(glyphs []Glyph) []layoutLine {
 		offsetRadius := int(math.Ceil(tol/offsetCell)) + 1
 		for directionDelta := -3; directionDelta <= 3; directionDelta++ {
 			directionBucket := (bucket + directionDelta + directionBuckets) % directionBuckets
+			cells := lineIndex[directionBucket]
+			if cells == nil {
+				continue // most pages run in one direction; skip the empty neighbors
+			}
 			for offsetDelta := -offsetRadius; offsetDelta <= offsetRadius; offsetDelta++ {
-				for _, j := range lineIndex[directionBucket][offsetBucket+offsetDelta] {
+				for _, j := range cells[offsetBucket+offsetDelta] {
 					if dotPoint(dir, lines[j].dir) < 0.985 {
 						continue
 					}
