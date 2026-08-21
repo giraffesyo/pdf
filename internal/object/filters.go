@@ -8,25 +8,40 @@ import (
 )
 
 // applyFilters wraps body with the stream's decode chain from /Filter and
-// /DecodeParms (each of which may be a single value or an array).
-func (r *Reader) applyFilters(body io.Reader, d dict) (io.Reader, error) {
+// /DecodeParms (each of which may be a single value or an array). The
+// returned release function hands pooled decoder state back once the
+// reader is no longer used; it is nil when the chain holds none.
+func (r *Reader) applyFilters(body io.Reader, d dict) (io.Reader, func(), error) {
 	filters := filterNames(d)
 	if len(filters) == 0 {
-		return body, nil
+		return body, nil, nil
 	}
 	if len(filters) > maxFilterChain {
-		return nil, fmt.Errorf("pdf: filter chain of %d exceeds limit", len(filters))
+		return nil, nil, fmt.Errorf("pdf: filter chain of %d exceeds limit", len(filters))
 	}
 	parms := decodeParms(r, d, len(filters))
 	rd := body
+	var releasers []filter.Releaser
+	release := func() {
+		for _, rel := range releasers {
+			rel.Release()
+		}
+	}
 	for i, name := range filters {
 		var err error
 		rd, err = filter.Apply(rd, name, parms[i])
 		if err != nil {
-			return nil, err
+			release()
+			return nil, nil, err
+		}
+		if rel, ok := rd.(filter.Releaser); ok {
+			releasers = append(releasers, rel)
 		}
 	}
-	return rd, nil
+	if len(releasers) == 0 {
+		return rd, nil, nil
+	}
+	return rd, release, nil
 }
 
 // filterNames returns the /Filter (or abbreviated /F) entries in order.

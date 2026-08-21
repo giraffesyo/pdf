@@ -210,6 +210,7 @@ func extractDocument(
 		}
 	}
 	fontCache := map[int]*fontInfo{}
+	glyphs := &glyphBuffer{} // chunks recycled across pages
 	for i, pageNode := range pageNodes {
 		pageNumber := i + 1
 		if !selectedPage(pageNumber, opts.Pages, len(pageNodes)) {
@@ -242,13 +243,14 @@ func extractDocument(
 			ignoreArtifacts: opts.IgnoreArtifacts,
 			foldLigatures:   !opts.PreserveLigatures,
 			fonts:           fontCache,
+			glyphs:          glyphs,
 		}
 		res := object.Inherited(pageNode, "Resources")
 		err = w.walkStream(pageNode.Key("Contents"), res, gstate{ctm: identity, hscale: 1})
 		if errors.Is(err, errStopPage) {
 			err = nil
 		}
-		page.Glyphs = w.glyphs
+		page.Glyphs = glyphs.take()
 		page.Warnings = append(page.Warnings, w.warnings...)
 		doc.Warnings = append(doc.Warnings, w.warnings...)
 
@@ -486,10 +488,89 @@ type walker struct {
 	foldLigatures   bool
 	fonts           map[int]*fontInfo // document-wide, by object number; see loadFont
 
-	glyphs   []Glyph
+	glyphs   *glyphBuffer
 	warnings []Warning
 	depth    int
 	ops      int
+}
+
+// glyphBuffer accumulates a page's glyphs in fixed-size chunks and hands
+// them over as one exactly sized slice. The glyph slice is an
+// extraction's largest allocation; growing it by appending copied several
+// times the final bytes into ever-larger slices, and any capacity guess
+// overshoots or undershoots as pages vary. With chunks a page costs its
+// final glyph bytes once, the chunks are recycled across the pages of a
+// document, and nothing is retained beyond what the page uses.
+type glyphBuffer struct {
+	chunks [][]Glyph // every chunk but the last is full
+	n      int       // glyphs held
+	free   [][]Glyph // recycled chunks
+}
+
+// glyphChunk is 24 KiB of glyphs: comfortably below the runtime's
+// large-object threshold, so chunks come from the small-object allocator.
+const glyphChunk = 256
+
+func (b *glyphBuffer) len() int { return b.n }
+
+func (b *glyphBuffer) add(g Glyph) {
+	if b.n%glyphChunk == 0 {
+		var c []Glyph
+		if k := len(b.free); k > 0 {
+			c, b.free = b.free[k-1][:0], b.free[:k-1]
+		} else {
+			c = make([]Glyph, 0, glyphChunk)
+		}
+		b.chunks = append(b.chunks, c)
+	}
+	last := &b.chunks[len(b.chunks)-1]
+	*last = append(*last, g)
+	b.n++
+}
+
+// truncate drops the glyphs from index n on.
+func (b *glyphBuffer) truncate(n int) {
+	for b.n > n {
+		last := &b.chunks[len(b.chunks)-1]
+		drop := min(len(*last), b.n-n)
+		*last = (*last)[:len(*last)-drop]
+		b.n -= drop
+		if len(*last) == 0 {
+			b.free = append(b.free, *last)
+			b.chunks = b.chunks[:len(b.chunks)-1]
+		}
+	}
+}
+
+// tail copies out the glyphs from index n on.
+func (b *glyphBuffer) tail(n int) []Glyph {
+	if n >= b.n {
+		return nil
+	}
+	out := make([]Glyph, 0, b.n-n)
+	for i := n / glyphChunk; i < len(b.chunks); i++ {
+		c := b.chunks[i]
+		if i == n/glyphChunk {
+			c = c[n%glyphChunk:]
+		}
+		out = append(out, c...)
+	}
+	return out
+}
+
+// take returns the glyphs as one exact slice and empties the buffer,
+// keeping the chunks for the next page.
+func (b *glyphBuffer) take() []Glyph {
+	if b.n == 0 {
+		return nil
+	}
+	out := make([]Glyph, 0, b.n)
+	for _, c := range b.chunks {
+		out = append(out, c...)
+		b.free = append(b.free, c[:0])
+	}
+	b.chunks, b.n = b.chunks[:0], 0
+	return out
 }
 
 func (w *walker) warning(code WarningCode, err error) error {
@@ -550,10 +631,10 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 		}
 		trm := mul(tm, gs.ctm)
 		for _, d := range decodedBuf {
-			if len(w.glyphs) >= w.limits.MaxGlyphsPerPage {
+			if w.glyphs.len() >= w.limits.MaxGlyphsPerPage {
 				return w.stopForLimit(errors.New("glyph count exceeds per-page limit"))
 			}
-			if len(w.glyphs)&1023 == 0 {
+			if w.glyphs.len()&1023 == 0 {
 				if err := w.ctx.Err(); err != nil {
 					return err
 				}
@@ -565,7 +646,7 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 				}
 				origin := translated(trm, d.vm.vx/1000*gs.fontSize, d.vm.vy/1000*gs.fontSize+gs.rise)
 				if text := sanitizeText(d.text, w.foldLigatures); text != "" {
-					w.glyphs = append(w.glyphs, positionedVerticalGlyph(text, origin, gs.fontSize, adv))
+					w.glyphs.add(positionedVerticalGlyph(text, origin, gs.fontSize, adv))
 				}
 				tm = translated(tm, 0, adv)
 				trm = translated(trm, 0, adv)
@@ -576,7 +657,7 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 				adv += gs.wordSp * gs.hscale
 			}
 			if text := sanitizeText(d.text, w.foldLigatures); text != "" {
-				w.glyphs = append(w.glyphs, positionedGlyph(text, trm, gs.fontSize, gs.rise, adv))
+				w.glyphs.add(positionedGlyph(text, trm, gs.fontSize, gs.rise, adv))
 			}
 			tm = translated(tm, adv, 0)
 			trm = translated(trm, adv, 0)
@@ -781,13 +862,13 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 			if !operandsAre(args, opName) {
 				return malformedOperator("BMC")
 			}
-			marked = append(marked, newMarkedContent(args[0].name, operand{}, resources, len(w.glyphs), tm, gs))
+			marked = append(marked, newMarkedContent(args[0].name, operand{}, resources, w.glyphs.len(), tm, gs))
 		case "BDC":
 			if len(args) != 2 || args[0].kind != opName ||
 				args[1].kind != opName && args[1].kind != opDict {
 				return malformedOperator("BDC")
 			}
-			marked = append(marked, newMarkedContent(args[0].name, args[1], resources, len(w.glyphs), tm, gs))
+			marked = append(marked, newMarkedContent(args[0].name, args[1], resources, w.glyphs.len(), tm, gs))
 		case "EMC":
 			if len(args) != 0 {
 				return malformedOperator("EMC")
@@ -869,18 +950,18 @@ func newMarkedContent(
 }
 
 func (w *walker) finishMarkedContent(mark markedContent) {
-	if mark.glyphStart > len(w.glyphs) {
+	if mark.glyphStart > w.glyphs.len() {
 		return
 	}
 	if mark.artifact && w.ignoreArtifacts {
-		w.glyphs = w.glyphs[:mark.glyphStart]
+		w.glyphs.truncate(mark.glyphStart)
 		return
 	}
 	if !mark.hasActual {
 		return
 	}
-	replaced := w.glyphs[mark.glyphStart:]
-	w.glyphs = w.glyphs[:mark.glyphStart]
+	replaced := w.glyphs.tail(mark.glyphStart)
+	w.glyphs.truncate(mark.glyphStart)
 	if mark.actualText == "" {
 		return
 	}
@@ -891,7 +972,7 @@ func (w *walker) finishMarkedContent(mark markedContent) {
 			size = 1
 		}
 		advance := float64(len([]rune(mark.actualText))) * size * 0.5
-		w.glyphs = append(w.glyphs, positionedGlyph(mark.actualText, trm, size, mark.gs.rise, advance))
+		w.glyphs.add(positionedGlyph(mark.actualText, trm, size, mark.gs.rise, advance))
 		return
 	}
 	// The replacement spans from the first glyph's origin to the last
@@ -904,7 +985,7 @@ func (w *walker) finishMarkedContent(mark markedContent) {
 	if glyph.Advance > 0 {
 		glyph.Direction = Point{X: dx / glyph.Advance, Y: dy / glyph.Advance}
 	}
-	w.glyphs = append(w.glyphs, glyph)
+	w.glyphs.add(glyph)
 }
 
 func positionedGlyph(text string, trm matrix, fontSize, rise, advance float64) Glyph {
