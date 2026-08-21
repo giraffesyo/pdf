@@ -458,14 +458,21 @@ func matrixFromOperands(args []operand) matrix {
 	return m
 }
 
-// sanitize strips glyphs that carry no textual meaning in Markdown output
-// — unmapped glyphs (U+FFFD), C0/C1 control characters, private-use icons
-// (icon fonts) — and normalizes non-breaking spaces to plain spaces (some
-// generators join every word with NBSP glyphs).
+// sanitize normalizes decoded glyph text for output. It strips glyphs that
+// carry no textual meaning — unmapped glyphs (U+FFFD), C0/C1 control
+// characters, private-use icons (icon fonts) — turns non-breaking spaces
+// into plain spaces (some generators join every word with NBSP glyphs), and
+// folds the Latin ligature presentation forms U+FB00–U+FB06 (ﬀ ﬁ ﬂ ﬃ ﬄ ﬅ ﬆ)
+// to their letter sequences. The Adobe Glyph List maps the glyph names
+// /ff /fi /fl /ffi /ffl — which every TeX font's /Differences array uses —
+// to those codepoints, so without folding "file" extracts as "ﬁle" and is
+// invisible to substring search and to tokenizers (SQLite FTS5's unicode61
+// among them) that skip compatibility decomposition; poppler, pdf.js and
+// MuPDF fold the same range.
 func sanitize(s string) string {
 	clean := true
 	for _, r := range s {
-		if isJunkRune(r) || r == ' ' {
+		if isJunkRune(r) || r == '\u00a0' || isLigatureRune(r) {
 			clean = false
 			break
 		}
@@ -473,19 +480,29 @@ func sanitize(s string) string {
 	if clean {
 		return s
 	}
-	out := make([]rune, 0, len(s))
+	var b strings.Builder
+	b.Grow(len(s)) // every rewrite is no longer than its source
 	for _, r := range s {
 		switch {
-		case r == ' ':
-			out = append(out, ' ')
+		case r == '\u00a0':
+			b.WriteByte(' ')
 		case isJunkRune(r):
+		case isLigatureRune(r):
+			b.WriteString(ligatureLetters[r-0xFB00])
 		default:
-			out = append(out, r)
+			b.WriteRune(r)
 		}
 	}
-	return string(out)
+	return b.String()
 }
 
 func isJunkRune(r rune) bool {
 	return r == '�' || r < 0x20 || (r >= 0x7F && r <= 0x9F) || (r >= 0xE000 && r <= 0xF8FF)
 }
+
+func isLigatureRune(r rune) bool { return r >= 0xFB00 && r <= 0xFB06 }
+
+// ligatureLetters spells U+FB00–U+FB06 in order. U+FB05 (long s t) folds
+// to "st" like U+FB06, as MuPDF does, since "ſ" is no more searchable than
+// the ligature itself.
+var ligatureLetters = [...]string{"ff", "fi", "fl", "ffi", "ffl", "st", "st"}

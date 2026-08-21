@@ -237,6 +237,23 @@ func TestControlAndPUAGlyphsDropped(t *testing.T) {
 	}
 }
 
+func TestSanitize(t *testing.T) {
+	cases := map[string]string{
+		"":                    "",
+		"plain":               "plain",
+		"a\u00a0b\x01\uE000c": "a bc", // NBSP, control, private use
+		"\uFB00\uFB01\uFB02\uFB03\uFB04\uFB05\uFB06": "fffiflffifflstst",
+		"De\uFB01nitions": "Definitions",
+		"\uFB02 \uFB01":   "fl fi",  // unrelated runes pass through
+		"\uFB07":          "\uFB07", // past the Latin ligature block
+	}
+	for in, want := range cases {
+		if got := sanitize(in); got != want {
+			t.Errorf("sanitize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestCyclicPageTreeRejected(t *testing.T) {
 	// A /Pages node listing itself as a kid: the library's page walk would
 	// recurse forever (stack overflow), so Extract must reject it up front.

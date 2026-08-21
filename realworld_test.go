@@ -158,6 +158,43 @@ endbfchar`)
 	}
 }
 
+// TestLigatureFolding: TeX fonts name ligature glyphs /fi /fl /ffi in
+// /Differences, which the Adobe Glyph List maps to U+FB01–U+FB03, and a
+// ToUnicode CMap may name the same codepoints. Both fold to letter
+// sequences so "file" is searchable, as poppler, pdf.js and MuPDF do.
+func TestLigatureFolding(t *testing.T) {
+	t.Run("differences", func(t *testing.T) {
+		doc := pdftest.Build(1,
+			pdftest.Catalog(2),
+			pdftest.Pages(3),
+			pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+			pdftest.Stream("", "BT /F1 12 Tf 72 700 Td (\x01le \x02ow o\x03ce \x04\x05) Tj ET"),
+			"<< /Type /Font /Subtype /Type1 /BaseFont /CMR10 "+
+				"/Encoding << /Differences [1 /fi /fl /ffi /ff /ffl] >> >>",
+		)
+		if text, want := glyphText(extract(t, doc)), "file flow office ffffl"; text != want {
+			t.Errorf("text = %q, want %q", text, want)
+		}
+	})
+	t.Run("tounicode", func(t *testing.T) {
+		doc := pdftest.Build(1,
+			pdftest.Catalog(2),
+			pdftest.Pages(3),
+			pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+			pdftest.Stream("", `BT /F1 12 Tf 72 700 Td `+pdftest.Hex2(1, 2)+` Tj ET`),
+			pdftest.Type0Font(6, 7),
+			pdftest.CIDFont("/W [1 [500 500]]"),
+			pdftest.ToUnicodeCMap(`2 beginbfchar
+<0001> <FB01>
+<0002> <FB05>
+endbfchar`),
+		)
+		if text := glyphText(extract(t, doc)); text != "fist" {
+			t.Errorf("text = %q, want fist", text)
+		}
+	})
+}
+
 // TestSurrogatePairToUnicode: emoji and symbols map through UTF-16BE
 // surrogate pairs in ToUnicode CMaps.
 func TestSurrogatePairToUnicode(t *testing.T) {
