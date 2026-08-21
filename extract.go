@@ -526,6 +526,7 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 	}
 	fonts := map[string]*fontInfo{}
 	warnedFonts := map[*fontInfo]bool{}
+	warnedEmbedded := map[*fontInfo]bool{}
 	var gsStack []gstate
 	var marked []markedContent
 	var decodedBuf []decoded
@@ -538,6 +539,15 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 			return nil
 		}
 		decodedBuf = f.appendDecoded(decodedBuf[:0], raw)
+		if f.embeddedErr != nil && !warnedEmbedded[f] {
+			// Reported here rather than at Tf: the program is parsed only
+			// once a code falls through to it, which is also when its
+			// absence matters.
+			warnedEmbedded[f] = true
+			if err := w.warning(WarningUnsupported, f.embeddedErr); err != nil {
+				return err
+			}
+		}
 		trm := mul(tm, gs.ctm)
 		for _, d := range decodedBuf {
 			if len(w.glyphs) >= w.limits.MaxGlyphsPerPage {

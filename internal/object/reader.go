@@ -28,6 +28,7 @@ type Reader struct {
 	size int64
 
 	xref    []xrefEntry
+	objBuf  []byte // parse window reused by parseObjectAt; see sliceInto
 	trailer dict
 	dec     *crypt.Decryptor
 	encNum  int // object number of the /Encrypt dict (strings never decrypt)
@@ -113,6 +114,25 @@ func (r *Reader) slice(off, n int64) []byte {
 	return buf[:m]
 }
 
+// sliceInto is slice reading into *scratch, which it grows as needed and
+// keeps for reuse. The lexer copies every string and name it produces,
+// so a parsed object never aliases the window; parseObjectAt reuses one
+// window per Reader instead of allocating 4 KiB for every object.
+func (r *Reader) sliceInto(scratch *[]byte, off, n int64) []byte {
+	if off < 0 || off >= r.size {
+		return nil
+	}
+	if off+n > r.size {
+		n = r.size - off
+	}
+	if int64(cap(*scratch)) < n {
+		*scratch = make([]byte, n)
+	}
+	buf := (*scratch)[:n]
+	m, _ := r.readAt(buf, off)
+	return buf[:m]
+}
+
 // headerOffset finds the "%PDF-" marker within the first part of the
 // file, tolerating leading junk. Both 1.x and 2.x are accepted.
 func headerOffset(ra io.ReaderAt, size int64) (int64, error) {
@@ -178,7 +198,7 @@ func (r *Reader) parseObjectAt(off int64, wantNum, wantGen int) (any, error) {
 	// rare large direct object rather than reading 64 KB per object.
 	window := int64(4 << 10)
 	for {
-		buf := r.slice(off, window)
+		buf := r.sliceInto(&r.objBuf, off, window)
 		obj, consumed, isStream, err := r.parseIndirect(buf, off, wantNum, wantGen)
 		if errors.Is(err, errNeedMore) && window < r.size-off {
 			window *= 4
