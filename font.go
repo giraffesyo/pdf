@@ -35,22 +35,42 @@ type verticalMetric struct {
 	vy float64
 }
 
+// loadFont returns the font resource called name. Lookups go through two
+// caches: names is scoped to one content stream (a resource name means
+// one thing within a stream), and shared spans the whole document, keyed
+// by the font dictionary's object number. The document cache is what
+// keeps a font that every page references — the common case — from being
+// decoded once per page: building a fontInfo can mean inflating and
+// parsing an embedded font program and its CMaps, which dominated
+// extraction time on multi-page documents. Fonts given as direct
+// dictionaries have no object number and are cached per stream only.
 func loadFont(
-	cache map[string]*fontInfo,
+	names map[string]*fontInfo,
+	shared map[int]*fontInfo,
 	resources object.Value,
 	name string,
 	resolver CMapResolver,
 	streamLimit int,
 ) *fontInfo {
-	if f, ok := cache[name]; ok {
+	if f, ok := names[name]; ok {
 		return f
 	}
 	fv := resources.Key("Font").Key(name)
+	num, indirect := fv.ObjectNumber()
+	if indirect {
+		if f, ok := shared[num]; ok {
+			names[name] = f
+			return f
+		}
+	}
 	var f *fontInfo
 	if fv.Kind() == object.Dict {
 		f = newFontInfo(fv, resolver, streamLimit)
 	}
-	cache[name] = f
+	names[name] = f
+	if indirect && shared != nil {
+		shared[num] = f
+	}
 	return f
 }
 

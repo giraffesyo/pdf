@@ -166,6 +166,7 @@ func extractDocument(
 			}
 		}
 	}
+	fontCache := map[int]*fontInfo{}
 	for i, pageNode := range pageNodes {
 		pageNumber := i + 1
 		if !selectedPage(pageNumber, opts.Pages, len(pageNodes)) {
@@ -197,6 +198,7 @@ func extractDocument(
 			resolver:        opts.CMapResolver,
 			ignoreArtifacts: opts.IgnoreArtifacts,
 			foldLigatures:   !opts.PreserveLigatures,
+			fonts:           fontCache,
 		}
 		res := object.Inherited(pageNode, "Resources")
 		err = w.walkStream(pageNode.Key("Contents"), res, gstate{ctm: identity, hscale: 1})
@@ -439,6 +441,7 @@ type walker struct {
 	resolver        CMapResolver
 	ignoreArtifacts bool
 	foldLigatures   bool
+	fonts           map[int]*fontInfo // document-wide, by object number; see loadFont
 
 	glyphs   []Glyph
 	warnings []Warning
@@ -588,7 +591,7 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 			if !operandsAre(args, opName, opNum) {
 				return malformedOperator("Tf")
 			}
-			gs.font = loadFont(fonts, resources, args[0].name, w.resolver, w.limits.MaxStreamBytes)
+			gs.font = loadFont(fonts, w.fonts, resources, args[0].name, w.resolver, w.limits.MaxStreamBytes)
 			gs.fontSize = args[1].num
 			if gs.font != nil && !warnedFonts[gs.font] {
 				warnedFonts[gs.font] = true

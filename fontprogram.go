@@ -1,6 +1,7 @@
 package pdf
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -385,7 +386,15 @@ func reverseGlyphMapping(mapping glyphMapping) map[uint16]string {
 
 var type1EncodingPattern = regexp.MustCompile(`(?m)\bdup[ \t]+([0-9]{1,3})[ \t]+/([A-Za-z0-9_.]+)[ \t]+put\b`)
 
+// parseType1Encoding reads the /Encoding array of a Type1 font program.
+// Only the cleartext portion before the eexec operator is scanned: the
+// encoding lives there by construction (Adobe Type 1 Font Format, §2.3),
+// and the encrypted private portion that follows is typically far larger,
+// so matching across it made embedded-font decoding dominate extraction.
 func parseType1Encoding(data []byte) map[uint32]string {
+	if i := bytes.Index(data, []byte("eexec")); i >= 0 {
+		data = data[:i]
+	}
 	out := map[uint32]string{}
 	for _, match := range type1EncodingPattern.FindAllSubmatch(data, 512) {
 		code, err := strconv.ParseUint(string(match[1]), 10, 8)
