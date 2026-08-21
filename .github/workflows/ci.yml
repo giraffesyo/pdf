@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
+      - name: install tesseract (exercises ocr/tesseract against a real engine)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
       - name: build
         run: go build ./...
       - name: test
@@ -62,6 +65,8 @@ jobs:
         run: go test -run '^$' -fuzz '^FuzzExtract$' -fuzztime 60s .
       - name: fuzz Reader 60s
         run: go test -run '^$' -fuzz '^FuzzReader$' -fuzztime 60s ./internal/object
+      - name: fuzz ExtractImages 60s
+        run: go test -run '^$' -fuzz '^FuzzExtractImages$' -fuzztime 60s .
 
   benchmarks:
     runs-on: ubuntu-latest

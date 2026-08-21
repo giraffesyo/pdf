@@ -1,8 +1,10 @@
 // Package filter implements the PDF stream decode filters of ISO 32000-1
 // §7.4 that text extraction needs: FlateDecode, LZWDecode, ASCIIHexDecode,
 // ASCII85Decode and RunLengthDecode, with the PNG and TIFF predictors.
-// Image-only filters (DCTDecode, JPXDecode, CCITTFaxDecode, JBIG2Decode)
-// are rejected — content streams never use them.
+// The image codecs (DCTDecode, JPXDecode, CCITTFaxDecode, JBIG2Decode) are
+// not stream filters here: Apply rejects them, and ImageCodec identifies
+// them so a caller can stop a filter chain at the codec and hand the
+// still-encoded image data to a decoder.
 //
 // The package knows nothing about the PDF object model: callers extract
 // /DecodeParms fields into Params.
@@ -41,6 +43,24 @@ func (p Params) withDefaults() Params {
 		p.Columns = 1
 	}
 	return p
+}
+
+// ImageCodec reports whether name (full or abbreviated) is one of the
+// image codecs, returning its full name: DCTDecode, JPXDecode,
+// CCITTFaxDecode or JBIG2Decode.
+func ImageCodec(name string) (string, bool) {
+	switch name {
+	case "DCTDecode", "DCT":
+		return "DCTDecode", true
+	case "JPXDecode":
+		return "JPXDecode", true
+	case "CCITTFaxDecode", "CCF":
+		return "CCITTFaxDecode", true
+	case "JBIG2Decode":
+		return "JBIG2Decode", true
+	default:
+		return "", false
+	}
 }
 
 // Apply wraps r with the named decode filter. The returned reader fails

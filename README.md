@@ -31,7 +31,7 @@ vertical runs retain their reading direction. `Page.TextIn` and
 `Extract` is the permissive, all-pages convenience API. `ExtractWithOptions`
 adds passwords, page ranges, strict mode, configurable resource limits,
 artifact filtering, layout strategies, named CMap resolution, document
-extras, and an optional OCR handoff:
+extras, page images, and an optional OCR handoff:
 
 ```go
 doc, err := pdf.ExtractWithOptions(ctx, readerAt, size, pdf.Options{
@@ -45,6 +45,7 @@ doc, err := pdf.ExtractWithOptions(ctx, readerAt, size, pdf.Options{
     IncludeOutlines:    true,
     IncludeAnnotations: true,
     IncludeFormValues:  true,
+    IncludeImages:      true,
 })
 ```
 
@@ -67,10 +68,63 @@ summary, err := pdf.ExtractPages(ctx, readerAt, size, opts, func(page pdf.Page) 
 })
 ```
 
-The core remains dependency-free. Applications can implement `pdf.OCR` to
-handle pages whose content streams produce no text. The callback receives the
-original `io.ReaderAt`, file size, page number, and page geometry, so it can
-invoke the renderer/OCR engine appropriate for the application.
+## Images and OCR
+
+Scanned pages have no text to extract; they have an image. With
+`IncludeImages`, every image a page paints — image XObjects and inline
+images, through Form XObjects — is reported in `Page.Images` with where it
+landed on the page and its data in the most directly usable form:
+
+```go
+for _, im := range page.Images {
+    im.Bounds()            // page-space rectangle; Quad() for rotated placements
+    im.ToPage(x, y)        // image pixel → page point, for positioning OCR output
+    im.Filter              // "DCTDecode": Data is a JPEG file; "JPXDecode", "CCITTFaxDecode",
+                           // "JBIG2Decode": still encoded; "": unpacked samples
+    img, err := im.Decode() // image.Image for raw samples, JPEG, CCITT G3/G4, JBIG2
+}
+```
+
+`Decode` handles unpacked samples in the Device, Cal, ICCBased, Indexed
+and single-colorant Separation/DeviceN spaces and image masks at 1–16 bits
+per component, DCTDecode through `image/jpeg`, and — natively, from the
+ITU-T specifications — CCITT Group 3/4 fax and JBIG2 (generic, symbol and
+text regions with arithmetic coding, which is what scanner pipelines
+emit). JPXDecode and the rarer JBIG2 features (Huffman tables,
+refinement, halftones) return `errors.ErrUnsupported`; their `Data` is
+still handed over for an external decoder. `Limits.MaxImagePixels` bounds
+what `Decode` will allocate.
+
+The core remains dependency-free: no OCR engine is bundled. Applications
+implement `pdf.OCR`, which receives the page's glyphs and images and
+returns positioned glyphs that join the page's text — `Page.Text`,
+`TextIn` and the layout modes then treat OCR words like typeset ones.
+`Options.OCRPolicy` selects the pages: those with no text (the default),
+those that paint an image (mixed typeset text and scanned figures), or
+all of them. `Page.OCRGlyphs` counts the glyphs that came from OCR.
+Without `IncludeImages`, image data is read only for the pages the policy
+selects and is not retained afterwards. OCR runs concurrently across
+pages under `Options.Concurrency`, so implementations are expected to be
+safe for concurrent use.
+
+[`ocr/tesseract`](ocr/tesseract) is a reference implementation that shells
+out to the Tesseract command-line program (which must be installed), feeds
+it each image — JPEG as is, everything else through `Decode` as PNG — and
+maps its word boxes onto the page:
+
+```go
+import "github.com/giraffesyo/pdf/ocr/tesseract"
+
+doc, err := pdf.ExtractWithOptions(ctx, readerAt, size, pdf.Options{
+    OCR: &tesseract.Engine{Languages: []string{"eng"}},
+})
+```
+
+The same shape fits a cloud OCR API or a vision model: decode or forward
+`Image.Data`, and place the results with `Image.ToPage`. The request also
+carries the original `io.ReaderAt` for implementations that render the
+whole page with an external renderer — the only route for text that was
+converted to vector outlines.
 
 ## Why another PDF text extractor
 
@@ -87,7 +141,7 @@ text extraction breaks on files that are common in the wild:
 | Array token split across /Contents segments | lexer hangs forever | handled |
 | Decompression bombs, stalled filter chains | unbounded CPU/memory | hard budgets |
 | Cyclic page trees | stack overflow (crash) | rejected upfront |
-| Inline images (BI/ID/EI) | derails the lexer | skipped cleanly |
+| Inline images (BI/ID/EI) | derails the lexer | lexed exactly, reported as images |
 
 Everything is implemented here, from ISO 32000 directly, with **no
 external dependencies**: the object layer (cross-reference tables and
@@ -109,16 +163,19 @@ searchable.
 
 ## Limitations
 
-- No OCR: scanned pages and text converted to vector outlines have no text
-  to extract unless the caller supplies an `OCR` implementation.
+- No bundled OCR: scanned pages and text converted to vector outlines have
+  no text to extract unless the caller supplies an `OCR` implementation
+  (see [Images and OCR](#images-and-ocr)). The package does not rasterize
+  pages, so outlined text needs an external renderer.
 - Layout reconstruction is heuristic. Direction-aware, content-order, and
   column modes are available, but highly irregular tables may still require
   application-specific analysis of glyph quads.
 - `Identity-H` and `Identity-V` CMaps are built in. Other named predefined
   CMaps are loaded through `Options.CMapResolver`; embedded CMap streams and
   `usecmap` inheritance are parsed natively.
-- Image filters (DCT/JPX/CCITT/JBIG2) are not decoded — text extraction
-  itself does not need them. An OCR implementation may use its own renderer.
+- `Image.Decode` does not decode JPXDecode (JPEG 2000) or the Huffman,
+  refinement and halftone parts of JBIG2; their encoded data is still
+  reported. Soft masks and colour-key masking are not applied.
 
 ## Benchmarks
 

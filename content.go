@@ -199,14 +199,24 @@ func interpretContentPooled(data []byte, pool *[][]operand, do func(op []byte, a
 			switch string(kw) {
 			case "":
 				lx.i++
-			case "true", "false":
+			case "true":
+				stack = append(stack, operand{kind: opBool, num: 1})
+			case "false":
 				stack = append(stack, operand{kind: opBool})
 			case "null":
 				stack = append(stack, operand{kind: opNull})
 			case "BI":
-				lx.skipInlineImage()
+				// An inline image reaches do as the EI operator with its
+				// dictionary and data as operands, so the interpreter sees
+				// it like any other operator without lexing binary data.
+				dict, data, ok := lx.readInlineImage()
 				lx.recycle(stack)
 				stack = stack[:0]
+				if ok {
+					if err := do([]byte("EI"), []operand{{kind: opDict, dict: dict}, {kind: opStr, str: data}}); err != nil {
+						return err
+					}
+				}
 			default:
 				if err := do(kw, stack); err != nil {
 					return err
@@ -494,7 +504,9 @@ func (lx *contentLexer) readDict(depth int) (operand, bool) {
 				}
 			} else if kw := lx.readKeyword(); len(kw) > 0 {
 				switch string(kw) {
-				case "true", "false":
+				case "true":
+					out.dict[key] = operand{kind: opBool, num: 1}
+				case "false":
 					out.dict[key] = operand{kind: opBool}
 				case "null":
 					out.dict[key] = operand{kind: opNull}
@@ -614,22 +626,54 @@ func (lx *contentLexer) readKeyword() []byte {
 	return lx.data[start:lx.i]
 }
 
-// skipInlineImage consumes everything from after BI through the EI marker:
-// a dictionary, the ID keyword, then raw binary data no lexer can parse.
-func (lx *contentLexer) skipInlineImage() {
-	// Consume dictionary entries until the ID keyword.
+// readInlineImage consumes everything from after BI through the EI
+// marker — the image dictionary, the ID keyword, then binary data no lexer
+// can parse — and returns the dictionary and the data. ok is false when
+// the sequence is malformed; the lexer still skips what it can.
+//
+// The data's extent is known exactly for unfiltered images, from the
+// dictionary. Otherwise it ends at the first whitespace-delimited EI that
+// is followed by something that looks like content again, since encoded
+// data can contain the bytes "EI" by chance.
+func (lx *contentLexer) readInlineImage() (dict map[string]operand, data []byte, ok bool) {
+	dict = map[string]operand{}
 	foundData := false
 	for lx.i < len(lx.data) {
 		lx.skipSpace()
 		if lx.i >= len(lx.data) {
-			return
+			break
 		}
 		before := lx.i
-		if lx.data[lx.i] == '/' || lx.data[lx.i] == '(' || lx.data[lx.i] == '<' || lx.data[lx.i] == '[' {
-			lx.readOperand(0)
-		} else if kw := lx.readKeyword(); len(kw) == 2 && kw[0] == 'I' && kw[1] == 'D' {
-			lx.i++ // the single whitespace byte after ID
-			foundData = true
+		switch c := lx.data[lx.i]; c {
+		case '/':
+			key := lx.readName()
+			lx.skipSpace()
+			if lx.i < len(lx.data) {
+				if c := lx.data[lx.i]; c == '/' || c == '(' || c == '<' || c == '[' || c == '{' ||
+					c == '+' || c == '-' || c == '.' || c >= '0' && c <= '9' {
+					if value, ok := lx.readOperand(1); ok {
+						dict[key] = value
+					}
+				} else if kw := lx.readKeyword(); len(kw) > 0 {
+					switch string(kw) {
+					case "true":
+						dict[key] = operand{kind: opBool, num: 1}
+					case "false":
+						dict[key] = operand{kind: opBool}
+					case "null":
+						dict[key] = operand{kind: opNull}
+					}
+				}
+			}
+		case '(', '<', '[':
+			lx.readOperand(1) // a stray value with no key
+		default:
+			if kw := lx.readKeyword(); len(kw) == 2 && kw[0] == 'I' && kw[1] == 'D' {
+				lx.i++ // the single whitespace byte after ID
+				foundData = true
+			}
+		}
+		if foundData {
 			break
 		}
 		if lx.i == before {
@@ -638,21 +682,55 @@ func (lx *contentLexer) skipInlineImage() {
 	}
 	if !foundData {
 		lx.setErr(errors.New("inline image missing ID marker"))
-		return
+		return nil, nil, false
 	}
-	// Scan for whitespace-delimited EI.
-	for ; lx.i+1 < len(lx.data); lx.i++ {
+	start := min(lx.i, len(lx.data))
+	if n := inlineImageLength(dict); n >= 0 && start+n <= len(lx.data) {
+		if end, found := lx.inlineImageEnd(start + n); found {
+			lx.i = end
+			return dict, lx.data[start : start+n], true
+		}
+	}
+	for lx.i = start; lx.i+1 < len(lx.data); lx.i++ {
 		if lx.data[lx.i] != 'E' || lx.data[lx.i+1] != 'I' {
 			continue
 		}
-		wsBefore := lx.i == 0 || isPDFSpace(lx.data[lx.i-1])
-		after := lx.i + 2
-		wsAfter := after >= len(lx.data) || isPDFSpace(lx.data[after]) || isDelim(lx.data[after])
-		if wsBefore && wsAfter {
-			lx.i = after
-			return
+		if end, found := lx.inlineImageEnd(lx.i); found {
+			data := lx.data[start:lx.i]
+			if n := len(data); n > 0 && isPDFSpace(data[n-1]) {
+				data = data[:n-1] // the whitespace before EI is not image data
+			}
+			lx.i = end
+			return dict, data, true
 		}
 	}
 	lx.i = len(lx.data)
 	lx.setErr(errors.New("inline image missing EI marker"))
+	return nil, nil, false
+}
+
+// inlineImageEnd reports whether an EI marker ends the inline image at
+// or just after position i: optional whitespace, EI, then a delimiter or
+// whitespace, then — since encoded image data can contain those bytes
+// too — only printable ASCII in the bytes that follow.
+func (lx *contentLexer) inlineImageEnd(i int) (end int, found bool) {
+	for i < len(lx.data) && isPDFSpace(lx.data[i]) {
+		i++
+	}
+	if i+1 >= len(lx.data) || lx.data[i] != 'E' || lx.data[i+1] != 'I' {
+		return 0, false
+	}
+	if i > 0 && !isPDFSpace(lx.data[i-1]) {
+		return 0, false
+	}
+	after := i + 2
+	if after < len(lx.data) && !isPDFSpace(lx.data[after]) && !isDelim(lx.data[after]) {
+		return 0, false
+	}
+	for _, c := range lx.data[after:min(after+16, len(lx.data))] {
+		if !isPDFSpace(c) && (c < 0x20 || c > 0x7E) {
+			return 0, false
+		}
+	}
+	return after, true
 }

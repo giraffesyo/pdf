@@ -14,9 +14,18 @@
 // text operator, honors tagged-PDF replacement text, never loops on tokens
 // straddling /Contents array segments, and reports bounded partial extraction
 // caused by decompression bombs, stalled filter chains, or work limits.
+//
+// Scanned pages carry images rather than text. Options.IncludeImages
+// reports every image a page paints with its placement and data (Image),
+// Image.Decode turns raw samples, JPEG, CCITT fax and JBIG2 into an
+// image.Image, and Options.OCR hands the pages an OCRPolicy selects to an
+// OCR implementation whose words join the page's glyphs. No OCR engine is
+// bundled; ocr/tesseract is a reference implementation over the Tesseract
+// command-line program.
 package pdf
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -90,8 +99,16 @@ func (g Glyph) direction() Point {
 
 // Page holds the glyphs of one page in content order.
 type Page struct {
-	Number      int
-	Glyphs      []Glyph
+	Number int
+	// Glyphs holds the page's text in content order. Glyphs an OCR
+	// implementation supplied come last; OCRGlyphs counts them.
+	Glyphs []Glyph
+	// OCRGlyphs is the number of trailing Glyphs the OCR implementation
+	// supplied rather than the content streams.
+	OCRGlyphs int
+	// Images holds the images the page paints, in content order, when
+	// Options.IncludeImages is set.
+	Images      []Image
 	MediaBox    Rect
 	CropBox     Rect
 	Rotation    int
@@ -321,6 +338,7 @@ func (e *pageExtractor) extract(state *pageState, pageNode object.Value, pageNum
 		resolver:        e.opts.CMapResolver,
 		ignoreArtifacts: e.opts.IgnoreArtifacts,
 		foldLigatures:   !e.opts.PreserveLigatures,
+		collectImages:   e.opts.IncludeImages || e.opts.OCR != nil,
 		fonts:           e.fonts,
 		glyphs:          state.glyphs,
 		scratch:         state.scratch,
@@ -331,37 +349,66 @@ func (e *pageExtractor) extract(state *pageState, pageNode object.Value, pageNum
 		err = nil
 	}
 	page.Glyphs = state.glyphs.take()
+
+	// Image data is read only once it is known to be wanted: by the
+	// caller, or by the OCR implementation for a page the policy selects.
+	ocr := err == nil && e.opts.OCR != nil && e.ocrSelects(page, len(w.images))
+	if err == nil && (e.opts.IncludeImages || ocr) {
+		page.Images, err = w.loadImages()
+	}
 	page.Warnings = append(page.Warnings, w.warnings...)
 	out.warnings = append(out.warnings, w.warnings...)
 
-	if err == nil && e.opts.OCR != nil && len(page.Glyphs) == 0 {
-		page.Glyphs, err = e.opts.OCR.ExtractPage(e.ctx, OCRRequest{
+	if ocr && err == nil {
+		glyphs, ocrErr := e.opts.OCR.ExtractPage(e.ctx, OCRRequest{
 			Reader:     e.file,
 			Size:       e.size,
 			PageNumber: pageNumber,
 			Page:       page,
 		})
-		if err != nil {
-			warning := Warning{Page: pageNumber, Code: WarningOCR, Err: err}
+		if len(glyphs) > 0 {
+			page.Glyphs = append(page.Glyphs, glyphs...)
+			page.OCRGlyphs = len(glyphs)
+		}
+		if ocrErr != nil {
+			warning := Warning{Page: pageNumber, Code: WarningOCR, Err: ocrErr}
 			page.Warnings = append(page.Warnings, warning)
 			out.warnings = append(out.warnings, warning)
 			if e.opts.Strict {
 				err = &StrictError{Warning: warning}
-			} else {
-				err = nil
 			}
 		}
+	}
+	if !e.opts.IncludeImages {
+		page.Images = nil // loaded for the OCR request only
 	}
 	out.page, out.err = page, err
 	return out
 }
 
+// ocrSelects reports whether the OCR policy asks about a page, given what
+// its content streams yielded: glyphs, and images painted (counted
+// before any were loaded).
+func (e *pageExtractor) ocrSelects(page Page, images int) bool {
+	switch e.opts.OCRPolicy {
+	case OCRImagePages:
+		return images > 0
+	case OCRAllPages:
+		return true
+	default:
+		return len(page.Glyphs) == 0
+	}
+}
+
 // pageWorkers reports how many pages to extract at once. Options that
 // make the order of execution observable — a strict run stops at the
-// first warning, and OCR and CMapResolver are caller code that need not
-// be safe for concurrent use — extract sequentially.
+// first warning, and CMapResolver is caller code that need not be safe
+// for concurrent use — extract sequentially. OCR is caller code too, but
+// its contract is to be safe for concurrent use: it is the slowest stage
+// of a scanned document by far, and running it one page at a time would
+// throw away the concurrency the document most needs.
 func pageWorkers(opts Options, pages int) int {
-	if opts.Strict || opts.OCR != nil || opts.CMapResolver != nil || pages < 2 {
+	if opts.Strict || opts.CMapResolver != nil || pages < 2 {
 		return 1
 	}
 	if workers := opts.Concurrency; workers > 0 {
@@ -690,6 +737,21 @@ type gstate struct {
 const maxFormDepth = 8
 const maxWarningsPerPage = 256
 
+// maxImagesPerPage bounds the image paintings a page records; each is
+// small, but a page painting one image a million times should not cost
+// a hundred megabytes. Real pages built from image strips stay far below.
+const maxImagesPerPage = 10_000
+
+// maxImageBytesPerPage bounds a page's image data in total: a page may
+// paint thousands of distinct images, and MaxStreamBytes bounds each one
+// only. 256 MiB holds any real page several times over.
+const maxImageBytesPerPage = 256 << 20
+
+// maxImagePixels bounds what Image.Decode allocates: 64 Mi pixels, which
+// holds a 600 dpi letter page (34 Mi) but not a decompression bomb's
+// claimed dimensions.
+const maxImagePixels = 64 << 20
+
 // Work budgets per page. Compressed content streams can inflate to
 // hundreds of megabytes of operators (accidental or hostile decompression
 // bombs); without a hard stop a single page could consume gigabytes of
@@ -717,6 +779,11 @@ type walker struct {
 	warnings []Warning
 	depth    int
 	ops      int
+
+	// collectImages records image paintings in images, for Page.Images or
+	// an OCR request; their data is read afterwards by loadImages.
+	collectImages bool
+	images        []pageImage
 }
 
 // docScratch holds buffers that page walks reuse across the pages of a
@@ -1080,7 +1147,13 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 				return malformedOperator("Do")
 			}
 			xobj := resources.Key("XObject").Key(args[0].name)
-			if xobj.Kind() != object.Stream || xobj.Key("Subtype").Name() != "Form" {
+			if xobj.Kind() != object.Stream {
+				break
+			}
+			if xobj.Key("Subtype").Name() == "Image" {
+				return w.recordImage(pageImage{ctm: gs.ctm, xobject: xobj})
+			}
+			if xobj.Key("Subtype").Name() != "Form" {
 				break
 			}
 			if w.depth >= w.limits.MaxFormDepth {
@@ -1107,6 +1180,17 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 			if err != nil {
 				return err
 			}
+		case "EI":
+			// The lexer delivers an inline image as EI with its dictionary
+			// and data; see readInlineImage.
+			if !operandsAre(args, opDict, opStr) {
+				return malformedOperator("EI")
+			}
+			return w.recordImage(pageImage{
+				ctm:       gs.ctm,
+				inline:    inlineImage{dict: args[0].dict, data: args[1].str},
+				resources: resources,
+			})
 		case "BMC":
 			if !operandsAre(args, opName) {
 				return malformedOperator("BMC")
@@ -1148,6 +1232,55 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 		return err
 	}
 	return w.warning(WarningMalformedPage, err)
+}
+
+// recordImage notes an image painting for loadImages. Inline image data
+// points into the content buffer, which is reused for the next page, so
+// it is copied now.
+func (w *walker) recordImage(img pageImage) error {
+	if !w.collectImages {
+		return nil
+	}
+	if len(w.images) >= w.limits.MaxImagesPerPage {
+		return w.stopForLimit(errors.New("image count exceeds per-page limit"))
+	}
+	if img.inline.data != nil {
+		img.inline.data = bytes.Clone(img.inline.data)
+	}
+	w.images = append(w.images, img)
+	return nil
+}
+
+// loadImages reads the recorded images' data. An image that cannot be
+// read is reported as a warning and left out; in strict mode that ends
+// the page with the images loaded so far.
+func (w *walker) loadImages() ([]Image, error) {
+	if len(w.images) == 0 {
+		return nil, nil
+	}
+	loader := newImageLoader(w.limits)
+	images := make([]Image, 0, len(w.images))
+	for _, src := range w.images {
+		im, err := loader.load(src)
+		if err != nil {
+			if errors.Is(err, errSkippedImage) {
+				continue
+			}
+			code := WarningStream
+			switch {
+			case errors.Is(err, safeio.ErrLimitExceeded):
+				code = WarningStreamLimit
+			case errors.Is(err, errors.ErrUnsupported):
+				code = WarningUnsupported
+			}
+			if err := w.warning(code, fmt.Errorf("image: %w", err)); err != nil {
+				return images, err
+			}
+			continue
+		}
+		images = append(images, im)
+	}
+	return images, nil
 }
 
 type markedContent struct {
