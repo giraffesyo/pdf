@@ -27,7 +27,7 @@ func TestLoadFontSharedAcrossStreams(t *testing.T) {
 	}
 	res1 := object.Inherited(r.Page(1), "Resources")
 	res2 := object.Inherited(r.Page(2), "Resources")
-	shared := map[int]*fontInfo{}
+	shared := newFontCache()
 	names1 := map[string]*fontInfo{}
 	names2 := map[string]*fontInfo{}
 
@@ -39,8 +39,8 @@ func TestLoadFontSharedAcrossStreams(t *testing.T) {
 	if got := loadFont(names1, shared, res1, "F1", nil, 0); got != f1 {
 		t.Errorf("repeat lookup in the same stream = %p, want cached %p", got, f1)
 	}
-	if len(shared) != 1 {
-		t.Errorf("shared cache has %d entries, want 1 (only the indirect font)", len(shared))
+	if len(shared.m) != 1 {
+		t.Errorf("shared cache has %d entries, want 1 (only the indirect font)", len(shared.m))
 	}
 
 	d1 := loadFont(names1, shared, res1, "D", nil, 0)
@@ -48,8 +48,8 @@ func TestLoadFontSharedAcrossStreams(t *testing.T) {
 	if d1 == nil || d2 == nil || d1 == d2 {
 		t.Errorf("direct-dictionary fonts: page1=%p page2=%p, want separate per-stream entries", d1, d2)
 	}
-	if len(shared) != 1 {
-		t.Errorf("direct-dictionary font entered the shared cache (%d entries)", len(shared))
+	if len(shared.m) != 1 {
+		t.Errorf("direct-dictionary font entered the shared cache (%d entries)", len(shared.m))
 	}
 
 	// A nil shared cache must degrade to per-stream caching, not panic.

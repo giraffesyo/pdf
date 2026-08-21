@@ -254,6 +254,17 @@ type Options struct {
 
 	CMapResolver CMapResolver
 	OCR          OCR
+
+	// Concurrency bounds how many pages are extracted at once. Zero picks
+	// a worker per available processor; one extracts sequentially.
+	// Extraction stays deterministic either way: pages, their glyphs, and
+	// their warnings come out in the same order.
+	//
+	// Pages run concurrently only when nothing observable depends on the
+	// order they execute in. Strict stops at the first warning, and OCR
+	// and CMapResolver are caller code, so those extract sequentially
+	// whatever this is set to.
+	Concurrency int
 }
 
 func (o Options) validate() error {
@@ -272,6 +283,9 @@ func (o Options) validate() error {
 	case LayoutPosition, LayoutContentOrder, LayoutColumns:
 	default:
 		return errors.New("pdf: unknown layout mode")
+	}
+	if o.Concurrency < 0 {
+		return errors.New("pdf: Concurrency must not be negative")
 	}
 	return nil
 }

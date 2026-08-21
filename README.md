@@ -184,6 +184,19 @@ set. It does show that this package recovers the expected text from every
 fixture, including Form XObjects, xref streams, object streams, and
 encrypted files.
 
+## Concurrency
+
+`Extract` reconstructs the pages of a long document in parallel, on
+cloned readers that share the cross-reference table and decryption key
+but resolve objects independently, and `Document.Text` reconstructs their
+text the same way. Output does not depend on it: pages, glyphs, and
+warnings come out in the same order either way. `Options.Concurrency`
+sets the number of workers — zero, the default, picks one per processor
+up to a cap and falls back to sequential extraction for short documents,
+and one extracts sequentially. Strict extraction, `OCR`, and
+`CMapResolver` always run sequentially, so a caller's own code is never
+invoked concurrently.
+
 ## Regression corpus
 
 `testdata/corpus/` holds real documents — LaTeX, Word, and scanning-pipeline
