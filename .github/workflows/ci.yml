@@ -73,6 +73,11 @@ jobs:
       - name: comparison matrix
         working-directory: benchmarks
         run: go test -run TestCompetitorComparison -v ./...
+      # Absolute bytes/allocs per extraction over the real-document corpus.
+      # Runs without -race (the test matrix has it), under which sync.Pool
+      # drops objects at random and the counts stop being deterministic.
+      - name: allocation budget
+        run: go test -run '^TestCorpusAllocationBudget$' -count=1 -v . 2>&1 | grep -v '^=== RUN'
       - name: benchmarks
         if: github.event_name != 'pull_request'
         run: |

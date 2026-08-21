@@ -192,9 +192,13 @@ under redistributable licenses (see `testdata/corpus/NOTICE.md`).
 `TestCorpusGolden` pins `Document.Text` for each file in
 `testdata/corpus/golden/`, so a decoding or layout change is a reviewable
 diff; accept an intentional change with
-`go test -run TestCorpusGolden -update`. `BenchmarkCorpus` measures
-`Extract` plus `Document.Text` over the same files, and CI fails a pull
-request that regresses it against its base. Documents that cannot be
+`go test -run TestCorpusGolden -update`. `TestCorpusAllocationBudget`
+pins bytes and allocations per extraction for each file — stable across
+machines, unlike timing — in `testdata/corpus/golden/budget.json`, and
+fails when a file exceeds its budget by more than 15%
+(`go test -run TestCorpusAllocationBudget -update` accepts a deliberate
+change). `BenchmarkCorpus` measures `Extract` plus `Document.Text` over the
+same files, and CI fails a pull request that regresses it against its base. Documents that cannot be
 committed can be benchmarked locally with
 `PDF_CORPUS_DIR=/path/to/pdfs go test -bench '^BenchmarkCorpus$' -run '^$' .`.
 
