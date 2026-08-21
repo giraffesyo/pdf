@@ -65,6 +65,10 @@ jobs:
 
   benchmarks:
     runs-on: ubuntu-latest
+    # The regression check posts its comparison as a pull-request comment.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -131,3 +135,37 @@ jobs:
           fail-on-alert: true
           summary-always: true
           skip-fetch-gh-pages: true
+      # The gate above only fails the build; this reports what changed.
+      # (Its own comment options leave a commit comment, which a pull
+      # request does not show.) benchstat compares the two runs already
+      # measured, and the comment is rewritten in place on each push.
+      # Skipped for forks, whose token cannot write comments.
+      - name: comment benchmark comparison
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          go install golang.org/x/perf/cmd/benchstat@latest
+          marker='<!-- benchmark-comparison -->'
+          {
+            echo "$marker"
+            echo "### Benchmarks vs \`${{ github.base_ref }}\`"
+            echo
+            echo '```'
+            "$(go env GOPATH)/bin/benchstat" base-bench.txt head-bench.txt
+            echo '```'
+            echo
+            echo "_One run each; treat differences under about 10% as noise._"
+          } > comparison.md
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq "[.[] | select(.body | startswith(\"$marker\")) | .id] | first // empty")
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comparison.md >/dev/null
+            echo "updated comment $id"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@comparison.md >/dev/null
+            echo "created comment"
+          fi
