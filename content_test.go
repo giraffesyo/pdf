@@ -2,6 +2,8 @@ package pdf
 
 import (
 	"bytes"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -177,5 +179,33 @@ func TestSimpleEndToEnd(t *testing.T) {
 	glyphs := extract(t, simpleDoc(`BT /F1 12 Tf 72 720 Td (hello) Tj ET`))
 	if len(glyphs) != 5 {
 		t.Errorf("glyphs = %d, want 5", len(glyphs))
+	}
+}
+
+func TestPlainNumberMatchesStrconv(t *testing.T) {
+	tokens := []string{
+		"0", "7", "-7", "+7", "12.5", "-12.5", ".5", "-.5", "5.", "0.000001",
+		"123456789012345", "1234567890123456", "-0", "0.1", "3.14159265358979",
+		"72.000", "-300", "1e5", "--5", "3.4.5", ".", "+", "1_0", "0x10", "Infinity",
+		"0.30000000000000004", "999999999999999", "0.1234567890123456789012",
+	}
+	for _, tok := range tokens {
+		want, wantErr := strconv.ParseFloat(tok, 64)
+		got, ok := parsePlainNumber([]byte(tok))
+		if !ok {
+			continue // falls back to strconv; any form is allowed to
+		}
+		if wantErr != nil {
+			t.Errorf("%q: fast path accepted what strconv rejects (%v)", tok, wantErr)
+			continue
+		}
+		if math.Float64bits(got) != math.Float64bits(want) {
+			t.Errorf("%q: fast path %v (%x), strconv %v (%x)", tok, got, math.Float64bits(got), want, math.Float64bits(want))
+		}
+	}
+	for _, tok := range []string{"0", "-12.5", ".5", "5.", "72.000"} {
+		if _, ok := parsePlainNumber([]byte(tok)); !ok {
+			t.Errorf("%q: expected the fast path to handle it", tok)
+		}
 	}
 }

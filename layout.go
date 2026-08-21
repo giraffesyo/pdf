@@ -201,11 +201,13 @@ func glyphBaseline(g Glyph, dir Point) (Point, Point) {
 }
 
 func glyphProjection(g Glyph, dir Point, end bool) float64 {
-	start, finish := glyphBaseline(g, dir)
-	if end {
-		return dotPoint(finish, dir)
+	if !end {
+		// The origin's projection needs no baseline: this is what
+		// glyphBaseline's start would give, without computing its end.
+		return g.X*dir.X + g.Y*dir.Y
 	}
-	return dotPoint(start, dir)
+	_, finish := glyphBaseline(g, dir)
+	return dotPoint(finish, dir)
 }
 
 func dotPoint(a, b Point) float64 { return a.X*b.X + a.Y*b.Y }
