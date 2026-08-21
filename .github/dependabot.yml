@@ -1,10 +1,45 @@
 version: 2
 updates:
+  # The root module has no dependencies — the package is pure Go and
+  # depends on the standard library alone — so this entry exists to keep
+  # that true visibly rather than to carry updates.
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    groups:
+      go-modules:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # The comparison suite is a separate module precisely so its
+  # dependencies stay out of the root module's graph, which also kept it
+  # out of these updates: the libraries it measures against were pinned
+  # wherever they happened to land. A comparison is only worth publishing
+  # against current releases, so they are tracked here.
+  - package-ecosystem: gomod
+    directory: /benchmarks
+    schedule:
+      interval: weekly
+    groups:
+      benchmark-comparators:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
