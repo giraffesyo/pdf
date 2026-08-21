@@ -52,6 +52,7 @@ func buildLayoutLines(glyphs []Glyph) []layoutLine {
 	)
 	var lines []layoutLine
 	lineIndex := make([]map[int][]int, directionBuckets)
+	prev := -1 // the line the previous glyph joined
 	for i, glyph := range glyphs {
 		dir := glyphDirection(glyph)
 		normal := Point{X: -dir.Y, Y: dir.X}
@@ -64,9 +65,15 @@ func buildLayoutLines(glyphs []Glyph) []layoutLine {
 		best := -1
 		bestDistance := math.MaxFloat64
 		bucket := layoutDirectionBucket(dir, directionBuckets)
+		// Consecutive glyphs of a run share a baseline exactly, so the
+		// previous glyph's line is at distance zero — nothing can beat it
+		// — and the neighborhood search below is skipped.
+		if prev >= 0 && offset == lines[prev].offset && dotPoint(dir, lines[prev].dir) >= 0.985 {
+			best, bestDistance = prev, 0
+		}
 		offsetBucket := int(math.Floor(offset / offsetCell))
 		offsetRadius := int(math.Ceil(tol/offsetCell)) + 1
-		for directionDelta := -3; directionDelta <= 3; directionDelta++ {
+		for directionDelta := -3; directionDelta <= 3 && best < 0; directionDelta++ {
 			directionBucket := (bucket + directionDelta + directionBuckets) % directionBuckets
 			cells := lineIndex[directionBucket]
 			if cells == nil {
@@ -98,12 +105,17 @@ func buildLayoutLines(glyphs []Glyph) []layoutLine {
 			}
 			key := int(math.Floor(offset / offsetCell))
 			lineIndex[bucket][key] = append(lineIndex[bucket][key], len(lines)-1)
+			prev = len(lines) - 1
 			continue
 		}
 		lines[best].glyphs = append(lines[best].glyphs, item)
+		prev = best
 	}
 	for i := range lines {
 		line := &lines[i]
+		if layoutLineSorted(line) {
+			continue // text drawn in reading order, the common case
+		}
 		slices.SortStableFunc(line.glyphs, func(a, b layoutGlyph) int {
 			ap := glyphProjection(*a.Glyph, line.dir, false)
 			bp := glyphProjection(*b.Glyph, line.dir, false)
@@ -118,6 +130,21 @@ func buildLayoutLines(glyphs []Glyph) []layoutLine {
 		})
 	}
 	return lines
+}
+
+// layoutLineSorted reports whether the line's glyphs, which are in index
+// order, are already in non-decreasing baseline order — the order the
+// stable sort below would produce.
+func layoutLineSorted(line *layoutLine) bool {
+	prev := math.Inf(-1)
+	for _, g := range line.glyphs {
+		p := glyphProjection(*g.Glyph, line.dir, false)
+		if p < prev {
+			return false
+		}
+		prev = p
+	}
+	return true
 }
 
 func layoutDirectionBucket(dir Point, buckets int) int {
@@ -174,11 +201,13 @@ func glyphBaseline(g Glyph, dir Point) (Point, Point) {
 }
 
 func glyphProjection(g Glyph, dir Point, end bool) float64 {
-	start, finish := glyphBaseline(g, dir)
-	if end {
-		return dotPoint(finish, dir)
+	if !end {
+		// The origin's projection needs no baseline: this is what
+		// glyphBaseline's start would give, without computing its end.
+		return g.X*dir.X + g.Y*dir.Y
 	}
-	return dotPoint(start, dir)
+	_, finish := glyphBaseline(g, dir)
+	return dotPoint(finish, dir)
 }
 
 func dotPoint(a, b Point) float64 { return a.X*b.X + a.Y*b.Y }

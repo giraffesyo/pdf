@@ -516,16 +516,66 @@ func (lx *contentLexer) readNumber() (operand, bool) {
 	for lx.i < len(lx.data) && !isPDFSpace(lx.data[lx.i]) && !isDelim(lx.data[lx.i]) {
 		lx.i++
 	}
-	tok := string(lx.data[start:lx.i])
 	if lx.i == start {
 		lx.i++
 		return operand{}, false
 	}
-	f, err := strconv.ParseFloat(tok, 64)
+	tok := lx.data[start:lx.i]
+	if f, ok := parsePlainNumber(tok); ok {
+		return operand{kind: opNum, num: f}, true
+	}
+	f, err := strconv.ParseFloat(string(tok), 64)
 	if err != nil {
 		return operand{}, false
 	}
 	return operand{kind: opNum, num: f}, true
+}
+
+// parsePlainNumber parses the decimal forms content streams use —
+// [+-]digits[.digits] — without allocating. The mantissa is kept below
+// 2^53 and the scale within the exactly representable powers of ten, so
+// the single division is correctly rounded and the result is the one
+// strconv.ParseFloat returns. Anything else (exponents, malformed
+// tokens) is left to strconv.
+func parsePlainNumber(tok []byte) (float64, bool) {
+	i, neg := 0, false
+	if i < len(tok) && (tok[i] == '+' || tok[i] == '-') {
+		neg = tok[i] == '-'
+		i++
+	}
+	var mant uint64
+	digits, frac, dot := 0, 0, false
+	for ; i < len(tok); i++ {
+		switch c := tok[i]; {
+		case c >= '0' && c <= '9':
+			mant = mant*10 + uint64(c-'0')
+			digits++
+			if dot {
+				frac++
+			}
+		case c == '.' && !dot:
+			dot = true
+		default:
+			return 0, false
+		}
+	}
+	if digits == 0 || digits > 15 || frac >= len(exactPow10) {
+		return 0, false
+	}
+	f := float64(mant)
+	if frac > 0 {
+		f /= exactPow10[frac]
+	}
+	if neg {
+		f = -f
+	}
+	return f, true
+}
+
+// exactPow10 holds the powers of ten that are exact in float64.
+var exactPow10 = [...]float64{
+	1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+	1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
 }
 
 func (lx *contentLexer) readKeyword() []byte {
