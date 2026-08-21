@@ -16,8 +16,16 @@ type fontInfo struct {
 	fallback      *encoding.Encoding // simple-font encoding (WinAnsi/MacRoman/Differences/...)
 	fallbackFirst bool               // explicit/standard PDF encoding precedes font-program hints
 	differences   map[byte]string    // explicit /Differences always override font-program hints
-	embedded      map[uint32]string
 	warnings      []error
+
+	// The embedded font program's code→text hints are consulted only when
+	// ToUnicode and the encoding do not map a code, so the program —
+	// often the largest stream a font owns — is inflated and parsed on
+	// first need rather than when the font is loaded. loadEmbedded is nil
+	// once that has happened (or when the font has no program).
+	embedded     map[uint32]string
+	loadEmbedded func() (map[uint32]string, error)
+	embeddedErr  error
 
 	firstChar int
 	widths    []float64          // simple fonts: indexed by code-firstChar
@@ -108,9 +116,8 @@ func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontI
 			f.cidWidths = parseCIDWidths(desc.Key("W"))
 			f.defVertical = parseDefaultVertical(desc.Key("DW2"))
 			f.cidVertical = parseCIDVertical(desc.Key("W2"))
-			f.embedded, err = embeddedCompositeFallback(desc, streamLimit)
-			if err != nil {
-				f.warnings = append(f.warnings, err)
+			f.loadEmbedded = func() (map[uint32]string, error) {
+				return embeddedCompositeFallback(desc, streamLimit)
 			}
 		}
 		return f
@@ -126,9 +133,8 @@ func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontI
 	}
 	f.differences = parseDifferences(fv.Key("Encoding").Key("Differences"))
 	f.fallback, f.fallbackFirst = fallbackEncoding(fv, f.differences)
-	f.embedded, err = embeddedSimpleFallback(fv, streamLimit)
-	if err != nil {
-		f.warnings = append(f.warnings, err)
+	f.loadEmbedded = func() (map[uint32]string, error) {
+		return embeddedSimpleFallback(fv, streamLimit)
 	}
 	f.firstChar = int(intOr(fv.Key("FirstChar"), 0))
 	if wArr := fv.Key("Widths"); wArr.Kind() == object.Array {
@@ -355,7 +361,7 @@ func (f *fontInfo) mapSimple(code uint32) string {
 			return s
 		}
 	}
-	if s := f.embedded[code]; sanitizeText(s, false) != "" {
+	if s := f.embeddedText(code); sanitizeText(s, false) != "" {
 		return s
 	}
 	if f.fallback != nil && code <= 0xFF {
@@ -370,10 +376,21 @@ func (f *fontInfo) mapComposite(key codeKey, cid uint32) string {
 			return s
 		}
 	}
-	if s := f.embedded[cid]; s != "" {
+	if s := f.embeddedText(cid); s != "" {
 		return s
 	}
 	return "�"
+}
+
+// embeddedText returns the font program's hint for code, parsing the
+// program on first use. A parse error is kept in embeddedErr for the
+// walker to report once per content stream.
+func (f *fontInfo) embeddedText(code uint32) string {
+	if f.loadEmbedded != nil {
+		f.embedded, f.embeddedErr = f.loadEmbedded()
+		f.loadEmbedded = nil
+	}
+	return f.embedded[code]
 }
 
 func (f *fontInfo) verticalMetric(cid uint32, width float64) verticalMetric {
