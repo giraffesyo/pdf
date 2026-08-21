@@ -353,7 +353,7 @@ func TestRotatedGeometryRegionAndLayoutStrategies(t *testing.T) {
 	}
 	glyphs := doc.Pages[0].Glyphs
 	if len(glyphs) != 2 || glyphs[0].Direction.Y <= 0 ||
-		glyphs[0].Baseline.End.Y <= glyphs[0].Baseline.Start.Y || glyphs[0].Quad == (Quad{}) {
+		glyphs[0].Baseline().End.Y <= glyphs[0].Baseline().Start.Y || glyphs[0].Quad() == (Quad{}) {
 		t.Fatalf("rotated geometry = %#v", glyphs)
 	}
 	if got := doc.Text(); got != "AB" {

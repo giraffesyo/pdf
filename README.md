@@ -17,7 +17,7 @@ if err != nil { ... }
 text := doc.Text()             // whole document, plain text
 page := doc.Pages[0]
 line := page.Text()            // per-page reconstruction
-glyphs := page.Glyphs          // text, quad, baseline, direction, size
+glyphs := page.Glyphs          // text, origin, advance, direction, size; Baseline(), Quad()
 ```
 
 `Page.Text` reconstructs reading order from direction-aware glyph baselines,
