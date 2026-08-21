@@ -78,6 +78,33 @@ func TestCorruptXrefRebuilt(t *testing.T) {
 	}
 }
 
+func TestRebuildBoundsObjectNumbers(t *testing.T) {
+	// A rebuilt file whose one damaged header claims an absurd object
+	// number must not size the table for it: 160 MB and a scan of every
+	// empty slot, for a few-hundred-byte file. Sparse but plausible
+	// numbering, the kind incremental updates leave, still recovers.
+	doc := simpleDoc("recover me")
+	i := bytes.LastIndex(doc, []byte("startxref"))
+	corrupt := append([]byte{}, doc[:i]...)
+	corrupt = append(corrupt, "444444440000000 0 obj\n<< >>\nendobj\n"...)
+	corrupt = append(corrupt, "3000 0 obj\n<< /Sparse true >>\nendobj\n"...)
+	corrupt = append(corrupt, "startxref\n99\n%%EOF\n"...)
+
+	r := open(t, corrupt)
+	if got := streamText(t, r.Page(1).Key("Contents")); got != "recover me" {
+		t.Errorf("rebuilt content = %q", got)
+	}
+	if n := len(r.xref); n > rebuildObjectBound(0) {
+		t.Errorf("xref table sized for %d objects from a header claiming an absurd number", n)
+	}
+	if ok, _ := r.Object(3000).Key("Sparse").Bool(); !ok {
+		t.Error("sparsely numbered object was not recovered")
+	}
+	if _, err := r.object(444444440000000, 0); err == nil {
+		t.Error("absurd object number resolved")
+	}
+}
+
 func TestXrefStreamPredictor(t *testing.T) {
 	// A predictor-encoded xref stream is the common real-world form; verify
 	// the object layer decodes it (exercised indirectly: BuildXrefStream
