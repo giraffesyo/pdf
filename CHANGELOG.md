@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0](https://github.com/giraffesyo/pdf/compare/v0.4.0...v0.5.0) (2026-08-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* report page images, decode CCITT/JBIG2, and hand OCR the page's images ([#30](https://github.com/giraffesyo/pdf/issues/30))
+
+### Features
+
+* report page images, decode CCITT/JBIG2, and hand OCR the page's images ([#30](https://github.com/giraffesyo/pdf/issues/30)) ([77aaa5d](https://github.com/giraffesyo/pdf/commit/77aaa5d3029604078d8436c24210bd3a078df37f))
+
+
+### Bug Fixes
+
+* bound the object numbers a cross-reference rebuild trusts ([#32](https://github.com/giraffesyo/pdf/issues/32)) ([c5515a7](https://github.com/giraffesyo/pdf/commit/c5515a73561457fbbed98bab5dcdc3ba20f0da07))
+
 ## [0.4.0](https://github.com/giraffesyo/pdf/compare/v0.3.0...v0.4.0) (2026-08-21)
 
 
