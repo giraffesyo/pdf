@@ -22,7 +22,9 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/giraffesyo/pdf/internal/object"
 	"github.com/giraffesyo/pdf/internal/safeio"
@@ -209,85 +211,263 @@ func extractDocument(
 			}
 		}
 	}
-	fontCache := map[int]*fontInfo{}
-	glyphs := &glyphBuffer{} // chunks recycled across pages
-	scratch := &docScratch{}
-	for i, pageNode := range pageNodes {
-		pageNumber := i + 1
-		if !selectedPage(pageNumber, opts.Pages, len(pageNodes)) {
-			continue
+	numbers := make([]int, 0, len(pageNodes))
+	for i := range pageNodes {
+		if pageNumber := i + 1; selectedPage(pageNumber, opts.Pages, len(pageNodes)) {
+			numbers = append(numbers, pageNumber)
 		}
-		if err := ctx.Err(); err != nil {
-			return doc, err
-		}
-		page := newPage(pageNode, pageNumber, opts.Layout)
-		if opts.IncludeAnnotations {
-			page.Annotations, err = extractAnnotations(pageNode, pageNumbers)
-			if err != nil {
-				warning := Warning{Page: pageNumber, Code: WarningMalformedPage, Err: err}
-				page.Warnings = append(page.Warnings, warning)
-				doc.Warnings = append(doc.Warnings, warning)
-				if opts.Strict {
-					if retainPages {
-						doc.Pages = append(doc.Pages, page)
-					}
-					return doc, &StrictError{Warning: warning}
-				}
-			}
-		}
-		w := &walker{
-			ctx:             ctx,
-			page:            pageNumber,
-			strict:          opts.Strict,
-			limits:          limits,
-			resolver:        opts.CMapResolver,
-			ignoreArtifacts: opts.IgnoreArtifacts,
-			foldLigatures:   !opts.PreserveLigatures,
-			fonts:           fontCache,
-			glyphs:          glyphs,
-			scratch:         scratch,
-		}
-		res := object.Inherited(pageNode, "Resources")
-		err = w.walkStream(pageNode.Key("Contents"), res, gstate{ctm: identity, hscale: 1})
-		if errors.Is(err, errStopPage) {
-			err = nil
-		}
-		page.Glyphs = glyphs.take()
-		page.Warnings = append(page.Warnings, w.warnings...)
-		doc.Warnings = append(doc.Warnings, w.warnings...)
+	}
+	ex := &pageExtractor{
+		ctx:         ctx,
+		opts:        opts,
+		limits:      limits,
+		pageNumbers: pageNumbers,
+		fonts:       newFontCache(),
+		file:        r,
+		size:        size,
+	}
 
-		if err == nil && opts.OCR != nil && len(page.Glyphs) == 0 {
-			page.Glyphs, err = opts.OCR.ExtractPage(ctx, OCRRequest{
-				Reader:     r,
-				Size:       size,
-				PageNumber: pageNumber,
-				Page:       page,
-			})
-			if err != nil {
-				warning := Warning{Page: pageNumber, Code: WarningOCR, Err: err}
-				page.Warnings = append(page.Warnings, warning)
-				doc.Warnings = append(doc.Warnings, warning)
-				if opts.Strict {
-					err = &StrictError{Warning: warning}
-				} else {
-					err = nil
-				}
-			}
+	// deliver applies one page's result to the document in page order,
+	// reporting whether extraction stops here.
+	deliver := func(out pageOutcome) (bool, error) {
+		if out.abort {
+			return true, out.err
 		}
-
+		doc.Warnings = append(doc.Warnings, out.warnings...)
 		if retainPages {
-			doc.Pages = append(doc.Pages, page)
+			doc.Pages = append(doc.Pages, out.page)
+		}
+		if out.skipYield {
+			return true, out.err
 		}
 		if yield != nil {
-			if yieldErr := yield(page); yieldErr != nil {
-				return doc, yieldErr
+			if yieldErr := yield(out.page); yieldErr != nil {
+				return true, yieldErr
 			}
 		}
-		if err != nil {
+		return out.err != nil, out.err
+	}
+
+	if workers := pageWorkers(opts, len(numbers)); workers > 1 {
+		return doc, extractPagesConcurrently(ex, reader, pageNodes, numbers, workers, deliver)
+	}
+	state := newPageState()
+	for _, pageNumber := range numbers {
+		out := ex.extract(state, pageNodes[pageNumber-1], pageNumber)
+		if stop, err := deliver(out); stop {
 			return doc, err
 		}
 	}
 	return doc, nil
+}
+
+// pageOutcome is one page's contribution to a document: the page itself,
+// the warnings it adds at document level, and whether extraction stops.
+type pageOutcome struct {
+	page      Page
+	warnings  []Warning
+	err       error
+	skipYield bool // deliver the page but do not yield it (strict annotation failure)
+	abort     bool // deliver nothing (cancelled context)
+}
+
+// pageState is the scratch one worker reuses from page to page. Fonts are
+// not here: they are shared by every worker, since decoding a font is the
+// expensive part and a fontInfo is safe to use from several pages at once.
+type pageState struct {
+	glyphs  *glyphBuffer
+	scratch *docScratch
+}
+
+func newPageState() *pageState {
+	return &pageState{glyphs: &glyphBuffer{}, scratch: &docScratch{}}
+}
+
+// pageExtractor holds what every page walk needs but no page owns.
+type pageExtractor struct {
+	ctx         context.Context
+	opts        Options
+	limits      Limits
+	pageNumbers map[int]int
+	fonts       *fontCache
+	file        io.ReaderAt
+	size        int64
+}
+
+func (e *pageExtractor) extract(state *pageState, pageNode object.Value, pageNumber int) pageOutcome {
+	if err := e.ctx.Err(); err != nil {
+		return pageOutcome{err: err, abort: true}
+	}
+	var out pageOutcome
+	page := newPage(pageNode, pageNumber, e.opts.Layout)
+	if e.opts.IncludeAnnotations {
+		var err error
+		page.Annotations, err = extractAnnotations(pageNode, e.pageNumbers)
+		if err != nil {
+			warning := Warning{Page: pageNumber, Code: WarningMalformedPage, Err: err}
+			page.Warnings = append(page.Warnings, warning)
+			out.warnings = append(out.warnings, warning)
+			if e.opts.Strict {
+				out.page, out.err, out.skipYield = page, &StrictError{Warning: warning}, true
+				return out
+			}
+		}
+	}
+	w := &walker{
+		ctx:             e.ctx,
+		page:            pageNumber,
+		strict:          e.opts.Strict,
+		limits:          e.limits,
+		resolver:        e.opts.CMapResolver,
+		ignoreArtifacts: e.opts.IgnoreArtifacts,
+		foldLigatures:   !e.opts.PreserveLigatures,
+		fonts:           e.fonts,
+		glyphs:          state.glyphs,
+		scratch:         state.scratch,
+	}
+	res := object.Inherited(pageNode, "Resources")
+	err := w.walkStream(pageNode.Key("Contents"), res, gstate{ctm: identity, hscale: 1})
+	if errors.Is(err, errStopPage) {
+		err = nil
+	}
+	page.Glyphs = state.glyphs.take()
+	page.Warnings = append(page.Warnings, w.warnings...)
+	out.warnings = append(out.warnings, w.warnings...)
+
+	if err == nil && e.opts.OCR != nil && len(page.Glyphs) == 0 {
+		page.Glyphs, err = e.opts.OCR.ExtractPage(e.ctx, OCRRequest{
+			Reader:     e.file,
+			Size:       e.size,
+			PageNumber: pageNumber,
+			Page:       page,
+		})
+		if err != nil {
+			warning := Warning{Page: pageNumber, Code: WarningOCR, Err: err}
+			page.Warnings = append(page.Warnings, warning)
+			out.warnings = append(out.warnings, warning)
+			if e.opts.Strict {
+				err = &StrictError{Warning: warning}
+			} else {
+				err = nil
+			}
+		}
+	}
+	out.page, out.err = page, err
+	return out
+}
+
+// pageWorkers reports how many pages to extract at once. Options that
+// make the order of execution observable — a strict run stops at the
+// first warning, and OCR and CMapResolver are caller code that need not
+// be safe for concurrent use — extract sequentially.
+func pageWorkers(opts Options, pages int) int {
+	if opts.Strict || opts.OCR != nil || opts.CMapResolver != nil || pages < 2 {
+		return 1
+	}
+	if workers := opts.Concurrency; workers > 0 {
+		return min(workers, pages)
+	}
+	// A worker costs a reader clone, whose caches start empty, so it pays
+	// for itself only over several pages. Below that the document extracts
+	// sequentially, which is also what keeps small files — where the whole
+	// extraction is shorter than the cost of starting the workers — from
+	// getting slower.
+	return min(runtime.GOMAXPROCS(0), pages/minPagesPerWorker, maxAutoWorkers)
+}
+
+const (
+	// minPagesPerWorker is how many pages a worker needs to be worth
+	// starting: a worker costs a reader clone whose caches start empty.
+	minPagesPerWorker = 4
+	// maxAutoWorkers bounds the automatic choice. Past this the shared
+	// file reads and the caller's own sequential work dominate, while
+	// every worker still costs its own buffers; a caller who knows better
+	// can set Concurrency explicitly.
+	maxAutoWorkers = 8
+)
+
+// extractPagesConcurrently extracts pages on cloned readers and delivers
+// the results in page order. Each worker owns a reader, so no object
+// resolution is shared; at most two pages per worker are held at once,
+// one being extracted and one waiting its turn to be delivered.
+func extractPagesConcurrently(
+	e *pageExtractor,
+	reader *object.Reader,
+	pageNodes []object.Value,
+	numbers []int,
+	workers int,
+	deliver func(pageOutcome) (bool, error),
+) error {
+	type slot struct {
+		out  pageOutcome
+		done chan struct{}
+	}
+	slots := make([]slot, len(numbers))
+	for i := range slots {
+		slots[i].done = make(chan struct{})
+	}
+
+	ctx, cancel := context.WithCancel(e.ctx)
+	defer cancel()
+	worker := *e
+	worker.ctx = ctx
+
+	next := make(chan int)
+	go func() {
+		defer close(next)
+		for i := range slots {
+			select {
+			case next <- i:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// The clone shares the immutable cross-reference data and
+			// decryption key. Re-rooting each page node in it by object
+			// number keeps every value this worker touches — and so every
+			// cache it fills — its own.
+			own := reader.Clone()
+			state := newPageState()
+			for i := range next {
+				pageNumber := numbers[i]
+				node := pageNodes[pageNumber-1]
+				if num, ok := node.ObjectNumber(); ok {
+					node = own.Object(num)
+				}
+				slots[i].out = worker.extract(state, node, pageNumber)
+				close(slots[i].done)
+			}
+		}()
+	}
+
+	var stopErr error
+	for i := range slots {
+		select {
+		case <-slots[i].done:
+		case <-ctx.Done():
+			stopErr = e.ctx.Err()
+		}
+		if stopErr != nil {
+			break
+		}
+		stop, err := deliver(slots[i].out)
+		if stop {
+			stopErr = err
+			break
+		}
+	}
+	cancel()
+	// Drain the slots the workers still hold so they observe the
+	// cancellation and exit rather than blocking on an unread channel.
+	wg.Wait()
+	return stopErr
 }
 
 func newPage(v object.Value, number int, layout LayoutOptions) Page {
@@ -328,16 +508,58 @@ func rectFromValue(v object.Value) Rect {
 // Text reconstructs the whole document's plain text: pages separated by
 // blank lines, empty pages skipped.
 func (d *Document) Text() string {
-	var b strings.Builder
-	for _, p := range d.Pages {
-		if t := p.Text(); t != "" {
-			if b.Len() > 0 {
-				b.WriteString("\n\n")
-			}
-			b.WriteString(t)
+	texts := d.pageTexts()
+	n := 0
+	for _, t := range texts {
+		if t != "" {
+			n += len(t) + 2
 		}
 	}
+	var b strings.Builder
+	b.Grow(n)
+	for _, t := range texts {
+		if t == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(t)
+	}
 	return b.String()
+}
+
+// pageTexts reconstructs every page's text, in parallel for a document
+// long enough to be worth it. Page.Text reads the page and allocates its
+// own working state, so the pages are independent.
+func (d *Document) pageTexts() []string {
+	texts := make([]string, len(d.Pages))
+	workers := min(runtime.GOMAXPROCS(0), len(d.Pages)/minPagesPerWorker, maxAutoWorkers)
+	if workers < 2 {
+		for i, p := range d.Pages {
+			texts[i] = p.Text()
+		}
+		return texts
+	}
+	var wg sync.WaitGroup
+	next := make(chan int)
+	go func() {
+		defer close(next)
+		for i := range d.Pages {
+			next <- i
+		}
+	}()
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				texts[i] = d.Pages[i].Text()
+			}
+		}()
+	}
+	wg.Wait()
+	return texts
 }
 
 // Text reconstructs a page's plain text using glyph baselines and the layout
@@ -488,7 +710,7 @@ type walker struct {
 	resolver        CMapResolver
 	ignoreArtifacts bool
 	foldLigatures   bool
-	fonts           map[int]*fontInfo // document-wide, by object number; see loadFont
+	fonts           *fontCache // document-wide, by object number; see loadFont
 
 	glyphs   *glyphBuffer
 	scratch  *docScratch
@@ -641,12 +863,12 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 			return nil
 		}
 		decodedBuf = f.appendDecoded(decodedBuf[:0], raw)
-		if f.embeddedErr != nil && !warnedEmbedded[f] {
+		if embeddedErr := f.embeddedFailure(); embeddedErr != nil && !warnedEmbedded[f] {
 			// Reported here rather than at Tf: the program is parsed only
 			// once a code falls through to it, which is also when its
 			// absence matters.
 			warnedEmbedded[f] = true
-			if err := w.warning(WarningUnsupported, f.embeddedErr); err != nil {
+			if err := w.warning(WarningUnsupported, embeddedErr); err != nil {
 				return err
 			}
 		}

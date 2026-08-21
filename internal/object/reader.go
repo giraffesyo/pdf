@@ -76,6 +76,40 @@ func NewReaderWithPassword(ra io.ReaderAt, size int64, password []byte) (*Reader
 	return r, nil
 }
 
+// Clone returns a Reader over the same file that resolves objects
+// independently of r. The cross-reference table, trailer, and decryption
+// key are immutable once parsed and are shared; the object caches, parse
+// window, and error state are not, so a clone may be used from another
+// goroutine while r is in use. io.ReaderAt permits the parallel ReadAt
+// calls this implies.
+//
+// A clone re-parses the objects it touches, so cloning is worthwhile to
+// give a worker its own reader, not to read a single object.
+func (r *Reader) Clone() *Reader {
+	return &Reader{
+		ra:        r.ra,
+		size:      r.size,
+		xref:      r.xref,
+		trailer:   r.trailer,
+		dec:       r.dec,
+		encNum:    r.encNum,
+		cache:     map[int]any{},
+		resolving: map[int]bool{},
+		objStms:   newObjStmCache(),
+	}
+}
+
+// Object returns the indirect object with the given number as a value
+// rooted in r, or null if r has no such object. It lets a caller that
+// located an object through one Reader reach the same object through
+// another — a clone, say — without walking to it again.
+func (r *Reader) Object(num int) Value {
+	if num < 0 || num >= len(r.xref) {
+		return Value{}
+	}
+	return Value{r: r, data: ref{num: num, gen: r.xref[num].gen}}
+}
+
 // Trailer returns the document trailer dictionary.
 func (r *Reader) Trailer() Value {
 	return Value{r: r, data: r.trailer}

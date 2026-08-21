@@ -19,6 +19,11 @@ import (
 // the figures last accepted with -update, and the test fails when a file
 // exceeds its budget by more than budgetHeadroom. A 3× memory regression
 // like v0.3.0's fails this on the first run.
+//
+// Extraction is measured sequentially. Concurrent extraction allocates a
+// set of buffers per worker, and the worker count follows the machine, so
+// the figures would otherwise depend on where the test ran; what is worth
+// pinning is the work itself.
 
 const budgetHeadroom = 1.15
 
@@ -81,7 +86,7 @@ func measureAllocations(tb testing.TB, data []byte) allocationBudget {
 	tb.Helper()
 	ctx := context.Background()
 	run := func() {
-		doc, err := Extract(ctx, bytes.NewReader(data), int64(len(data)))
+		doc, err := ExtractWithOptions(ctx, bytes.NewReader(data), int64(len(data)), Options{Concurrency: 1})
 		if err != nil {
 			tb.Fatal(err)
 		}

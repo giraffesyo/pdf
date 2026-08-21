@@ -3,6 +3,8 @@ package pdf
 import (
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/giraffesyo/pdf/internal/encoding"
 	"github.com/giraffesyo/pdf/internal/object"
@@ -23,15 +25,22 @@ type fontInfo struct {
 	// often the largest stream a font owns — is inflated and parsed on
 	// first need rather than when the font is loaded. loadEmbedded is nil
 	// once that has happened (or when the font has no program).
-	embedded     map[uint32]string
+	// The embedded font program's code→text hints are consulted only when
+	// ToUnicode and the encoding do not map a code, so the program —
+	// often the largest stream a font owns — is inflated and parsed on
+	// first need rather than when the font is loaded.
+	embeddedOnce sync.Once
 	loadEmbedded func() (map[uint32]string, error)
+	embedded     map[uint32]string
 	embeddedErr  error
 
 	// Simple fonts have at most 256 codes; each code's text is resolved
 	// once and then served from here instead of through the ToUnicode,
-	// Differences, and encoding lookups on every glyph.
-	simpleText  [256]string
-	simpleKnown [4]uint64 // bitmap over simpleText
+	// Differences, and encoding lookups on every glyph. The memo is
+	// atomic rather than locked: pages extracted concurrently share the
+	// font, and resolution is pure, so a code resolved twice stores the
+	// same text.
+	simpleText [256]atomic.Pointer[string]
 
 	firstChar int
 	widths    []float64          // simple fonts: indexed by code-firstChar
@@ -49,6 +58,29 @@ type verticalMetric struct {
 	vy float64
 }
 
+// fontCache is a document's fonts, keyed by the object number of their
+// dictionary. Pages extracted concurrently share it, so it carries a
+// mutex; a fontInfo itself is safe to use from several pages at once.
+type fontCache struct {
+	mu sync.Mutex
+	m  map[int]*fontInfo
+}
+
+func newFontCache() *fontCache { return &fontCache{m: map[int]*fontInfo{}} }
+
+func (c *fontCache) get(num int) (*fontInfo, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	f, ok := c.m[num]
+	return f, ok
+}
+
+func (c *fontCache) put(num int, f *fontInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m[num] = f
+}
+
 // loadFont returns the font resource called name. Lookups go through two
 // caches: names is scoped to one content stream (a resource name means
 // one thing within a stream), and shared spans the whole document, keyed
@@ -60,7 +92,7 @@ type verticalMetric struct {
 // dictionaries have no object number and are cached per stream only.
 func loadFont(
 	names map[string]*fontInfo,
-	shared map[int]*fontInfo,
+	shared *fontCache,
 	resources object.Value,
 	name string,
 	resolver CMapResolver,
@@ -71,8 +103,8 @@ func loadFont(
 	}
 	fv := resources.Key("Font").Key(name)
 	num, indirect := fv.ObjectNumber()
-	if indirect {
-		if f, ok := shared[num]; ok {
+	if indirect && shared != nil {
+		if f, ok := shared.get(num); ok {
 			names[name] = f
 			return f
 		}
@@ -83,7 +115,7 @@ func loadFont(
 	}
 	names[name] = f
 	if indirect && shared != nil {
-		shared[num] = f
+		shared.put(num, f)
 	}
 	return f
 }
@@ -355,11 +387,12 @@ func (f *fontInfo) mapSimple(code uint32) string {
 	if code > 0xff {
 		return f.resolveSimple(code)
 	}
-	if f.simpleKnown[code>>6]&(1<<(code&63)) == 0 {
-		f.simpleText[code] = f.resolveSimple(code)
-		f.simpleKnown[code>>6] |= 1 << (code & 63)
+	if s := f.simpleText[code].Load(); s != nil {
+		return *s
 	}
-	return f.simpleText[code]
+	s := f.resolveSimple(code)
+	f.simpleText[code].Store(&s)
+	return s
 }
 
 func (f *fontInfo) resolveSimple(code uint32) string {
@@ -403,12 +436,17 @@ func (f *fontInfo) mapComposite(key codeKey, cid uint32) string {
 // program on first use. A parse error is kept in embeddedErr for the
 // walker to report once per content stream.
 func (f *fontInfo) embeddedText(code uint32) string {
-	if f.loadEmbedded != nil {
-		f.embedded, f.embeddedErr = f.loadEmbedded()
-		f.loadEmbedded = nil
-	}
+	f.embeddedOnce.Do(func() {
+		if f.loadEmbedded != nil {
+			f.embedded, f.embeddedErr = f.loadEmbedded()
+		}
+	})
 	return f.embedded[code]
 }
+
+// embeddedFailure returns the font program's parse error once it has been
+// attempted, for the walker to report at the point of use.
+func (f *fontInfo) embeddedFailure() error { return f.embeddedErr }
 
 func (f *fontInfo) verticalMetric(cid uint32, width float64) verticalMetric {
 	vm, ok := f.cidVertical[cid]
