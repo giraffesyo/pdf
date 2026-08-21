@@ -65,6 +65,10 @@ jobs:
 
   benchmarks:
     runs-on: ubuntu-latest
+    # The regression check posts its comparison as a pull-request comment.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -126,3 +130,8 @@ jobs:
           fail-on-alert: true
           summary-always: true
           skip-fetch-gh-pages: true
+          # Post the base-vs-head table on the pull request, updating the
+          # same comment on each push instead of adding one per run.
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-always: true
+          comment-on-alert: true
