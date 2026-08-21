@@ -211,6 +211,7 @@ func extractDocument(
 	}
 	fontCache := map[int]*fontInfo{}
 	glyphs := &glyphBuffer{} // chunks recycled across pages
+	scratch := &docScratch{}
 	for i, pageNode := range pageNodes {
 		pageNumber := i + 1
 		if !selectedPage(pageNumber, opts.Pages, len(pageNodes)) {
@@ -244,6 +245,7 @@ func extractDocument(
 			foldLigatures:   !opts.PreserveLigatures,
 			fonts:           fontCache,
 			glyphs:          glyphs,
+			scratch:         scratch,
 		}
 		res := object.Inherited(pageNode, "Resources")
 		err = w.walkStream(pageNode.Key("Contents"), res, gstate{ctm: identity, hscale: 1})
@@ -489,9 +491,21 @@ type walker struct {
 	fonts           map[int]*fontInfo // document-wide, by object number; see loadFont
 
 	glyphs   *glyphBuffer
+	scratch  *docScratch
 	warnings []Warning
 	depth    int
 	ops      int
+}
+
+// docScratch holds buffers that page walks reuse across the pages of a
+// document: the decoded content, the lexer's array operand pool, and the
+// show operator's decoded-glyph buffer. Only top-level page walks use it;
+// a form XObject walked from within a page gets its own, since the page's
+// content is still being read.
+type docScratch struct {
+	content []byte
+	arrays  [][]operand
+	decoded []decoded
 }
 
 // glyphBuffer accumulates a page's glyphs in fixed-size chunks and hands
@@ -611,6 +625,13 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 	var gsStack []gstate
 	var marked []markedContent
 	var decodedBuf []decoded
+	var contentBuf []byte
+	var arrayPool *[][]operand
+	if w.depth == 0 && w.scratch != nil {
+		decodedBuf = w.scratch.decoded[:0]
+		contentBuf = w.scratch.content[:0]
+		arrayPool = &w.scratch.arrays
+	}
 	malformedOperators := map[string]bool{}
 	tm, tlm := identity, identity
 
@@ -665,7 +686,13 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 		return nil
 	}
 
-	data, streamErrs := contentBytesLimitError(strm, w.limits.MaxStreamBytes)
+	data, streamErrs := contentBytesLimitErrorInto(contentBuf, strm, w.limits.MaxStreamBytes)
+	if w.depth == 0 && w.scratch != nil {
+		defer func() {
+			w.scratch.content = data[:0]
+			w.scratch.decoded = decodedBuf[:0]
+		}()
+	}
 	for _, streamErr := range streamErrs {
 		code := WarningStream
 		if errors.Is(streamErr, safeio.ErrLimitExceeded) {
@@ -687,7 +714,7 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 		)
 	}
 
-	err := interpretContentError(data, func(op []byte, args []operand) error {
+	err := interpretContentPooled(data, arrayPool, func(op []byte, args []operand) error {
 		w.ops++
 		if w.ops > w.limits.MaxOperatorsPerPage {
 			return w.stopForLimit(errors.New("operator count exceeds per-page limit"))
