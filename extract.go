@@ -30,17 +30,60 @@ import (
 
 // Glyph is one decoded glyph (or glyph cluster) with its position in
 // unrotated page space.
+//
+// The geometry is stored compactly — a document's glyph slice is its
+// largest allocation — and Baseline and Quad derive the full shapes.
+// A Glyph carrying only Text, X, Y, Advance, and Size (for example one
+// supplied by an OCR hook) is treated as upright horizontal text.
 type Glyph struct {
 	Text    string  // decoded text, non-empty
-	X, Y    float64 // origin
-	Advance float64 // baseline advance in page units
+	X, Y    float64 // origin: where the baseline starts
+	Advance float64 // displacement along the baseline in page units
 	Size    float64 // effective font size
 
-	// Direction is the unit baseline direction. Baseline and Quad preserve
-	// rotation, skew, and vertical writing geometry.
+	// Direction is the unit direction the baseline runs in. Ascent and
+	// Descent are the vectors from the baseline to the far and near
+	// edges of the glyph box, preserving rotation, skew, and vertical
+	// writing: horizontal text has Ascent spanning the font size along
+	// the text-space y axis and a zero Descent; vertical text reaches
+	// half the font size to either side of its baseline.
 	Direction Point
-	Baseline  Line
-	Quad      Quad
+	Ascent    Point
+	Descent   Point
+}
+
+// Baseline returns the segment the glyph occupies along its writing
+// direction: from the origin, |Advance| page units along Direction.
+func (g Glyph) Baseline() Line {
+	dir := g.direction()
+	length := math.Abs(g.Advance)
+	start := Point{X: g.X, Y: g.Y}
+	return Line{Start: start, End: Point{X: start.X + dir.X*length, Y: start.Y + dir.Y*length}}
+}
+
+// Quad returns the glyph's region perimeter: the baseline offset by
+// Descent, then the same edge returning along Ascent.
+func (g Glyph) Quad() Quad {
+	b := g.Baseline()
+	ascent, descent := g.Ascent, g.Descent
+	if ascent == (Point{}) && descent == (Point{}) {
+		ascent = Point{Y: g.Size} // upright text: the box rises from the baseline
+	}
+	return Quad{
+		{X: b.Start.X + descent.X, Y: b.Start.Y + descent.Y},
+		{X: b.End.X + descent.X, Y: b.End.Y + descent.Y},
+		{X: b.End.X + ascent.X, Y: b.End.Y + ascent.Y},
+		{X: b.Start.X + ascent.X, Y: b.Start.Y + ascent.Y},
+	}
+}
+
+// direction is Direction normalized, or the page x axis for glyphs that
+// carry none.
+func (g Glyph) direction() Point {
+	if length := math.Hypot(g.Direction.X, g.Direction.Y); length > 1e-9 {
+		return Point{X: g.Direction.X / length, Y: g.Direction.Y / length}
+	}
+	return Point{X: 1}
 }
 
 // Page holds the glyphs of one page in content order.
@@ -841,16 +884,16 @@ func (w *walker) finishMarkedContent(mark markedContent) {
 		w.glyphs = append(w.glyphs, positionedGlyph(mark.actualText, trm, size, mark.gs.rise, advance))
 		return
 	}
+	// The replacement spans from the first glyph's origin to the last
+	// glyph's baseline end.
 	glyph := replaced[0]
 	glyph.Text = mark.actualText
-	last := replaced[len(replaced)-1]
-	glyph.Baseline.End = last.Baseline.End
-	glyph.Advance = math.Hypot(
-		glyph.Baseline.End.X-glyph.Baseline.Start.X,
-		glyph.Baseline.End.Y-glyph.Baseline.Start.Y,
-	)
-	glyph.Quad[1] = last.Quad[1]
-	glyph.Quad[2] = last.Quad[2]
+	end := replaced[len(replaced)-1].Baseline().End
+	dx, dy := end.X-glyph.X, end.Y-glyph.Y
+	glyph.Advance = math.Hypot(dx, dy)
+	if glyph.Advance > 0 {
+		glyph.Direction = Point{X: dx / glyph.Advance, Y: dy / glyph.Advance}
+	}
 	w.glyphs = append(w.glyphs, glyph)
 }
 
@@ -871,14 +914,6 @@ func positionedGlyph(text string, trm matrix, fontSize, rise, advance float64) G
 	if baselineLength := math.Hypot(end.X-start.X, end.Y-start.Y); baselineLength > 0 {
 		xDir = Point{X: (end.X - start.X) / baselineLength, Y: (end.Y - start.Y) / baselineLength}
 	}
-	top := Point{
-		X: start.X + fontSize*trm[2],
-		Y: start.Y + fontSize*trm[3],
-	}
-	topEnd := Point{
-		X: end.X + fontSize*trm[2],
-		Y: end.Y + fontSize*trm[3],
-	}
 	return Glyph{
 		Text:      text,
 		X:         start.X,
@@ -886,8 +921,7 @@ func positionedGlyph(text string, trm matrix, fontSize, rise, advance float64) G
 		Advance:   advance * xLen,
 		Size:      math.Abs(fontSize) * yLen,
 		Direction: xDir,
-		Baseline:  Line{Start: start, End: end},
-		Quad:      Quad{start, end, topEnd, top},
+		Ascent:    Point{X: fontSize * trm[2], Y: fontSize * trm[3]},
 	}
 }
 
@@ -899,23 +933,17 @@ func positionedVerticalGlyph(text string, trm matrix, fontSize, advance float64)
 	if length > 0 {
 		direction = Point{X: dx / length, Y: dy / length}
 	}
-	start := Point{X: trm[4], Y: trm[5]}
-	end := Point{X: start.X + dx, Y: start.Y + dy}
 	halfX := fontSize * trm[0] / 2
 	halfY := fontSize * trm[1] / 2
-	q0 := Point{X: start.X - halfX, Y: start.Y - halfY}
-	q1 := Point{X: end.X - halfX, Y: end.Y - halfY}
-	q2 := Point{X: end.X + halfX, Y: end.Y + halfY}
-	q3 := Point{X: start.X + halfX, Y: start.Y + halfY}
 	return Glyph{
 		Text:      text,
-		X:         start.X,
-		Y:         start.Y,
+		X:         trm[4],
+		Y:         trm[5],
 		Advance:   length,
 		Size:      math.Abs(fontSize) * scaleX(trm),
 		Direction: direction,
-		Baseline:  Line{Start: start, End: end},
-		Quad:      Quad{q0, q1, q2, q3},
+		Ascent:    Point{X: halfX, Y: halfY},
+		Descent:   Point{X: -halfX, Y: -halfY},
 	}
 }
 
