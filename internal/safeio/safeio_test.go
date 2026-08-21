@@ -2,9 +2,25 @@ package safeio
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"testing"
 )
+
+func TestReadAllGuardedLimitError(t *testing.T) {
+	t.Run("exact limit", func(t *testing.T) {
+		got, err := ReadAllGuardedLimitError(bytes.NewBufferString("abcd"), 4)
+		if err != nil || string(got) != "abcd" {
+			t.Fatalf("got %q, %v", got, err)
+		}
+	})
+	t.Run("exceeded", func(t *testing.T) {
+		got, err := ReadAllGuardedLimitError(bytes.NewBufferString("abcde"), 4)
+		if !errors.Is(err, ErrLimitExceeded) || string(got) != "abcd" {
+			t.Fatalf("got %q, %v", got, err)
+		}
+	})
+}
 
 func TestReadAllGuardedLimit(t *testing.T) {
 	tests := []struct {

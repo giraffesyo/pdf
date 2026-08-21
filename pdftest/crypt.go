@@ -11,11 +11,12 @@ import (
 )
 
 // EncryptSpec selects the standard-security-handler variant for
-// BuildEncrypted. The user password is always empty (the transparent-open
-// case); OwnerPassword is empty too.
+// BuildEncrypted.
 type EncryptSpec struct {
-	R   int  // revision: 2, 3, or 4
-	AES bool // R4 only: AES-128 (AESV2) instead of RC4
+	R             int  // revision: 2, 3, or 4
+	AES           bool // R4 only: AES-128 (AESV2) instead of RC4
+	UserPassword  string
+	OwnerPassword string
 }
 
 var padString = []byte{
@@ -39,8 +40,8 @@ func BuildEncrypted(rootID int, spec EncryptSpec, objs ...string) []byte {
 	if spec.R == 2 {
 		kl = 5
 	}
-	o := ownerString(kl, spec.R)
-	fileKey := deriveFileKey(o, p, id, kl, spec.R)
+	o := ownerString(kl, spec.R, []byte(spec.OwnerPassword), []byte(spec.UserPassword))
+	fileKey := deriveFileKey(o, p, id, kl, spec.R, []byte(spec.UserPassword))
 	u := userString(fileKey, id, spec.R)
 
 	encNum := len(objs) + 1
@@ -106,15 +107,15 @@ func rc4Bytes(key, data []byte) []byte {
 	return out
 }
 
-func ownerString(keyLen, r int) []byte {
-	key := hashN(pad(nil), 16)
+func ownerString(keyLen, r int, ownerPassword, userPassword []byte) []byte {
+	key := hashN(pad(ownerPassword), 16)
 	if r >= 3 {
 		for range 50 {
 			key = hashN(key, 16)
 		}
 	}
 	key = key[:keyLen]
-	o := pad(nil)
+	o := pad(userPassword)
 	if r == 2 {
 		return rc4Bytes(key, o)
 	}
@@ -124,9 +125,9 @@ func ownerString(keyLen, r int) []byte {
 	return o
 }
 
-func deriveFileKey(o []byte, p int32, id []byte, keyLen, r int) []byte {
+func deriveFileKey(o []byte, p int32, id []byte, keyLen, r int, userPassword []byte) []byte {
 	h := md5.New() //nolint:gosec // ISO 32000-1 §7.6.3 Algorithm 2
-	h.Write(pad(nil))
+	h.Write(pad(userPassword))
 	h.Write(o)
 	up := uint32(p) //nolint:gosec // /P is a 32-bit flag field
 	h.Write([]byte{byte(up & 0xFF), byte(up >> 8 & 0xFF), byte(up >> 16 & 0xFF), byte(up >> 24 & 0xFF)})

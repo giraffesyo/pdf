@@ -8,7 +8,7 @@ import (
 // entry. The /Encrypt dictionary itself is read before the decryptor
 // exists, so its strings (/O, /U) are never decrypted; its object number
 // is recorded so a later re-resolution stays exempt too.
-func (r *Reader) initEncrypt() error {
+func (r *Reader) initEncrypt(password []byte) error {
 	ev, ok := r.trailer["Encrypt"]
 	if !ok {
 		return nil
@@ -41,7 +41,7 @@ func (r *Reader) initEncrypt() error {
 	}
 	cfg.CF = cryptFilters(enc.Key("CF"))
 
-	dec, err := crypt.New(cfg)
+	dec, err := crypt.NewWithPassword(cfg, password)
 	if err != nil {
 		return err
 	}

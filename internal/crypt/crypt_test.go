@@ -175,6 +175,21 @@ func TestOwnerPasswordFallback(t *testing.T) {
 	}
 }
 
+func TestNonEmptyUserPassword(t *testing.T) {
+	userPassword := []byte("s3cret")
+	cfg := buildRC4Pw(4, 128, 4, true, userPassword)
+	decryptor, err := NewWithPassword(cfg, userPassword)
+	if err != nil {
+		t.Fatalf("NewWithPassword: %v", err)
+	}
+	fileKey := fileKeyRC4(padPassword(userPassword), cfg, 16)
+	plain := []byte("non-empty user password")
+	encrypted := encryptData(9, 0, AESV2, fileKey, plain)
+	if got := decryptor.DecryptStreamData(9, 0, encrypted); !bytes.Equal(got, plain) {
+		t.Fatalf("decrypted %q", got)
+	}
+}
+
 func TestUnsupportedHandler(t *testing.T) {
 	if _, err := New(Config{Filter: "MyCustomHandler", V: 2, R: 3}); err == nil {
 		t.Error("non-Standard filter must be rejected")

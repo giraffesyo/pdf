@@ -42,6 +42,12 @@ type Reader struct {
 // it for object access. It returns an error only for structural failures
 // that make the document unreadable.
 func NewReader(ra io.ReaderAt, size int64) (*Reader, error) {
+	return NewReaderWithPassword(ra, size, nil)
+}
+
+// NewReaderWithPassword is NewReader with an optional user or owner password
+// for documents using the standard security handler.
+func NewReaderWithPassword(ra io.ReaderAt, size int64, password []byte) (*Reader, error) {
 	if size <= 0 {
 		return nil, errors.New("pdf: empty file")
 	}
@@ -63,7 +69,7 @@ func NewReader(ra io.ReaderAt, size int64) (*Reader, error) {
 	if err := r.readXref(); err != nil {
 		return nil, err
 	}
-	if err := r.initEncrypt(); err != nil {
+	if err := r.initEncrypt(password); err != nil {
 		return nil, err
 	}
 	return r, nil

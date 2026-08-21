@@ -1,30 +1,31 @@
-// Package pdf extracts text from PDF files, with glyph positions.
+// Package pdf extracts text and direction-aware glyph geometry from PDF files.
 //
-// Extract returns per-page positioned glyphs; Page.Text reconstructs
-// plain text by clustering glyphs into lines and inserting word spacing
-// derived from glyph gaps and font metrics.
+// Extract returns per-page glyph quads and baselines; Page.Text reconstructs
+// plain text by clustering direction-compatible glyphs into lines and
+// inserting word spacing derived from glyph gaps and font metrics.
 //
 // The package is pure Go with no external dependencies. It implements the
 // PDF object layer (cross-reference tables and streams, object streams,
-// stream filters, and standard-handler decryption) natively per ISO
+// stream filters, and password-aware standard-handler decryption) natively per ISO
 // 32000, and on top of it a content-stream lexer, interpreter, and font
 // decoder tuned for real-world files: it descends into Form XObjects
 // (where e.g. Google Docs exports keep their text), honors /ToUnicode
 // even alongside an /Encoding dictionary, tracks positions through every
-// text operator, never loops on tokens straddling /Contents array
-// segments, and defends against decompression bombs, stalled filter
-// chains, and cyclic page trees.
+// text operator, honors tagged-PDF replacement text, never loops on tokens
+// straddling /Contents array segments, and reports bounded partial extraction
+// caused by decompression bombs, stalled filter chains, or work limits.
 package pdf
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
-	"slices"
 	"strings"
 
 	"github.com/giraffesyo/pdf/internal/object"
+	"github.com/giraffesyo/pdf/internal/safeio"
 )
 
 // Glyph is one decoded glyph (or glyph cluster) with its position in
@@ -32,50 +33,247 @@ import (
 type Glyph struct {
 	Text    string  // decoded text, non-empty
 	X, Y    float64 // origin
-	Advance float64 // horizontal advance
+	Advance float64 // baseline advance in page units
 	Size    float64 // effective font size
+
+	// Direction is the unit baseline direction. Baseline and Quad preserve
+	// rotation, skew, and vertical writing geometry.
+	Direction Point
+	Baseline  Line
+	Quad      Quad
 }
 
 // Page holds the glyphs of one page in content order.
 type Page struct {
-	Glyphs []Glyph
+	Number      int
+	Glyphs      []Glyph
+	MediaBox    Rect
+	CropBox     Rect
+	Rotation    int
+	Annotations []Annotation
+	Warnings    []Warning
+
+	layout LayoutOptions
 }
 
 // Document is the extraction result for a whole file.
 type Document struct {
-	Pages []Page
+	PageCount  int
+	Pages      []Page
+	Metadata   Metadata
+	Outlines   []Outline
+	FormFields []FormField
+	Warnings   []Warning
 }
 
 // Extract parses the PDF in r and extracts every page's glyphs. Malformed
 // pages yield whatever was decoded before the failure; a malformed file
-// returns an error. The context is checked between pages.
+// returns an error. The context is checked between pages and periodically
+// while processing page operators and glyphs.
 func Extract(ctx context.Context, r io.ReaderAt, size int64) (*Document, error) {
-	reader, err := object.NewReader(r, size)
+	return ExtractWithOptions(ctx, r, size, Options{})
+}
+
+// ExtractWithOptions extracts selected pages and document extras according to
+// opts. In strict mode it returns the partial document together with the first
+// warning as a *StrictError.
+func ExtractWithOptions(ctx context.Context, r io.ReaderAt, size int64, opts Options) (*Document, error) {
+	return extractDocument(ctx, r, size, opts, nil, true)
+}
+
+// ExtractPages extracts pages one at a time and calls yield without retaining
+// them in the returned Document. Document metadata, page count, form fields,
+// outlines, and accumulated warnings are still returned.
+func ExtractPages(
+	ctx context.Context,
+	r io.ReaderAt,
+	size int64,
+	opts Options,
+	yield func(Page) error,
+) (*Document, error) {
+	if yield == nil {
+		return nil, errors.New("pdf: nil page callback")
+	}
+	return extractDocument(ctx, r, size, opts, yield, false)
+}
+
+func extractDocument(
+	ctx context.Context,
+	r io.ReaderAt,
+	size int64,
+	opts Options,
+	yield func(Page) error,
+	retainPages bool,
+) (*Document, error) {
+	if err := opts.validate(); err != nil {
+		return nil, err
+	}
+	limits := opts.Limits.normalized()
+	reader, err := object.NewReaderWithPassword(r, size, []byte(opts.Password))
 	if err != nil {
 		return nil, err
 	}
-	// Reject cyclic/oversized page trees before walking them.
-	n, err := countPages(reader)
+	pageNodes, err := listPages(reader)
 	if err != nil {
 		return nil, err
 	}
-	// NumPages reads /Count, which a malformed file may make negative or
-	// huge; countPages bounds the real leaf count, so clamp between them.
-	if np := reader.NumPages(); np >= 0 && np < n {
-		n = np
-	}
-	doc := &Document{Pages: make([]Page, 0, n)}
-	for i := 1; i <= n; i++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	doc := &Document{PageCount: len(pageNodes)}
+	var pageNumbers map[int]int
+	if opts.IncludeOutlines || opts.IncludeAnnotations || opts.IncludeFormValues {
+		pageNumbers = make(map[int]int, len(pageNodes))
+		for i, pageNode := range pageNodes {
+			if number, ok := pageNode.ObjectNumber(); ok {
+				pageNumbers[number] = i + 1
+			}
 		}
-		page := reader.Page(i)
-		if page.IsNull() {
+	}
+	if retainPages {
+		doc.Pages = make([]Page, 0, len(pageNodes))
+	}
+	addDocumentWarning := func(code WarningCode, warningErr error) error {
+		warning := Warning{Code: code, Err: warningErr}
+		doc.Warnings = append(doc.Warnings, warning)
+		if opts.Strict {
+			return &StrictError{Warning: warning}
+		}
+		return nil
+	}
+	if opts.IncludeMetadata {
+		doc.Metadata, err = extractMetadata(reader, limits.MaxStreamBytes)
+		if err != nil {
+			code := WarningStream
+			if errors.Is(err, safeio.ErrLimitExceeded) {
+				code = WarningStreamLimit
+			}
+			if strictErr := addDocumentWarning(code, err); strictErr != nil {
+				return doc, strictErr
+			}
+		}
+	}
+	if opts.IncludeOutlines {
+		doc.Outlines, err = extractOutlines(reader, pageNumbers)
+		if err != nil {
+			if strictErr := addDocumentWarning(WarningMalformedDocument, err); strictErr != nil {
+				return doc, strictErr
+			}
+		}
+	}
+	if opts.IncludeFormValues {
+		doc.FormFields, err = extractFormFields(reader, pageNumbers)
+		if err != nil {
+			if strictErr := addDocumentWarning(WarningMalformedDocument, err); strictErr != nil {
+				return doc, strictErr
+			}
+		}
+	}
+	for i, pageNode := range pageNodes {
+		pageNumber := i + 1
+		if !selectedPage(pageNumber, opts.Pages, len(pageNodes)) {
 			continue
 		}
-		doc.Pages = append(doc.Pages, Page{Glyphs: extractPage(page)})
+		if err := ctx.Err(); err != nil {
+			return doc, err
+		}
+		page := newPage(pageNode, pageNumber, opts.Layout)
+		if opts.IncludeAnnotations {
+			page.Annotations, err = extractAnnotations(pageNode, pageNumbers)
+			if err != nil {
+				warning := Warning{Page: pageNumber, Code: WarningMalformedPage, Err: err}
+				page.Warnings = append(page.Warnings, warning)
+				doc.Warnings = append(doc.Warnings, warning)
+				if opts.Strict {
+					if retainPages {
+						doc.Pages = append(doc.Pages, page)
+					}
+					return doc, &StrictError{Warning: warning}
+				}
+			}
+		}
+		w := &walker{
+			ctx:             ctx,
+			page:            pageNumber,
+			strict:          opts.Strict,
+			limits:          limits,
+			resolver:        opts.CMapResolver,
+			ignoreArtifacts: opts.IgnoreArtifacts,
+			foldLigatures:   !opts.PreserveLigatures,
+		}
+		res := object.Inherited(pageNode, "Resources")
+		err = w.walkStream(pageNode.Key("Contents"), res, gstate{ctm: identity, hscale: 1})
+		if errors.Is(err, errStopPage) {
+			err = nil
+		}
+		page.Glyphs = w.glyphs
+		page.Warnings = append(page.Warnings, w.warnings...)
+		doc.Warnings = append(doc.Warnings, w.warnings...)
+
+		if err == nil && opts.OCR != nil && len(page.Glyphs) == 0 {
+			page.Glyphs, err = opts.OCR.ExtractPage(ctx, OCRRequest{
+				Reader:     r,
+				Size:       size,
+				PageNumber: pageNumber,
+				Page:       page,
+			})
+			if err != nil {
+				warning := Warning{Page: pageNumber, Code: WarningOCR, Err: err}
+				page.Warnings = append(page.Warnings, warning)
+				doc.Warnings = append(doc.Warnings, warning)
+				if opts.Strict {
+					err = &StrictError{Warning: warning}
+				} else {
+					err = nil
+				}
+			}
+		}
+
+		if retainPages {
+			doc.Pages = append(doc.Pages, page)
+		}
+		if yield != nil {
+			if yieldErr := yield(page); yieldErr != nil {
+				return doc, yieldErr
+			}
+		}
+		if err != nil {
+			return doc, err
+		}
 	}
 	return doc, nil
+}
+
+func newPage(v object.Value, number int, layout LayoutOptions) Page {
+	media := rectFromValue(object.Inherited(v, "MediaBox"))
+	crop := rectFromValue(object.Inherited(v, "CropBox"))
+	if crop == (Rect{}) {
+		crop = media
+	}
+	rotation := int(intOr(object.Inherited(v, "Rotate"), 0)) % 360
+	if rotation < 0 {
+		rotation += 360
+	}
+	return Page{
+		Number:   number,
+		MediaBox: media,
+		CropBox:  crop,
+		Rotation: rotation,
+		layout:   layout,
+	}
+}
+
+func rectFromValue(v object.Value) Rect {
+	if v.Kind() != object.Array || v.Len() < 4 {
+		return Rect{}
+	}
+	x0, _ := v.Index(0).Float64()
+	y0, _ := v.Index(1).Float64()
+	x1, _ := v.Index(2).Float64()
+	y1, _ := v.Index(3).Float64()
+	return Rect{
+		MinX: min(x0, x1),
+		MinY: min(y0, y1),
+		MaxX: max(x0, x1),
+		MaxY: max(y0, y1),
+	}
 }
 
 // Text reconstructs the whole document's plain text: pages separated by
@@ -93,136 +291,89 @@ func (d *Document) Text() string {
 	return b.String()
 }
 
-// Text reconstructs a page's plain text from glyph positions: glyphs are
-// clustered into lines by Y, ordered by X, and spaces are inserted where
-// the horizontal gap between glyphs is too wide to be kerning.
+// Text reconstructs a page's plain text using glyph baselines and the layout
+// selected at extraction time. Rotated and vertical runs retain their reading
+// direction, and spaces are inferred from geometric gaps.
 func (p Page) Text() string {
-	glyphs := p.Glyphs
-	if len(glyphs) == 0 {
+	return p.TextWithOptions(p.layout)
+}
+
+// TextWithOptions reconstructs page text using layout rather than the layout
+// selected during extraction.
+func (p Page) TextWithOptions(layout LayoutOptions) string {
+	if layout.Mode == LayoutContentOrder {
+		return p.contentOrderText()
+	}
+	return reconstructPositionText(p, layout.Mode == LayoutColumns)
+}
+
+func (p Page) contentOrderText() string {
+	if len(p.Glyphs) == 0 {
 		return ""
 	}
-
-	// Cluster into lines by Y (PDF Y grows upward). The tolerance is
-	// generous enough to pull superscripts/subscripts into their line but
-	// far smaller than typical line leading (~1.2em).
-	sorted := slices.Clone(glyphs)
-	slices.SortStableFunc(sorted, func(a, b Glyph) int {
-		switch {
-		case a.Y > b.Y:
-			return -1
-		case a.Y < b.Y:
-			return 1
-		default:
-			return 0
-		}
-	})
-	var lines [][]Glyph
-	lineStart := 0
-	lineY := sorted[0].Y
-	for i := 1; i < len(sorted); i++ {
-		g := sorted[i]
-		tol := 0.55 * g.Size
-		if tol <= 0 {
-			tol = 5
-		}
-		if lineY-g.Y > tol {
-			lines = append(lines, sorted[lineStart:i])
-			lineStart = i
-			lineY = g.Y
-		}
-	}
-	lines = append(lines, sorted[lineStart:])
-
 	var b strings.Builder
-	textBytes := 0
-	for _, g := range glyphs {
-		textBytes += len(g.Text)
-	}
-	b.Grow(textBytes + len(glyphs) + len(lines) - 1)
-	for li, line := range lines {
-		if li > 0 {
+	prev := p.Glyphs[0]
+	b.WriteString(prev.Text)
+	endsSpace := strings.HasSuffix(prev.Text, " ")
+	for _, g := range p.Glyphs[1:] {
+		lineTol := 0.55 * max(g.Size, prev.Size)
+		if lineTol <= 0 {
+			lineTol = 5
+		}
+		switch {
+		case math.Abs(g.Y-prev.Y) > lineTol:
 			b.WriteByte('\n')
+		case g.X-(prev.X+prev.Advance) > 0.17*max(g.Size, 1):
+			if !endsSpace && !strings.HasPrefix(g.Text, " ") {
+				b.WriteByte(' ')
+			}
 		}
-		slices.SortStableFunc(line, func(a, b Glyph) int {
-			switch {
-			case a.X < b.X:
-				return -1
-			case a.X > b.X:
-				return 1
-			default:
-				return 0
-			}
-		})
-		prevEnd := 0.0
-		endsSpace := false
-		for gi, g := range line {
-			if gi > 0 {
-				gap := g.X - prevEnd
-				thresh := 0.17 * g.Size
-				if thresh <= 0 {
-					thresh = 1
-				}
-				startsSpace := len(g.Text) > 0 && g.Text[0] == ' '
-				if gap > thresh && !endsSpace && !startsSpace {
-					b.WriteByte(' ')
-					endsSpace = true
-				}
-			}
-			b.WriteString(g.Text)
-			if g.Text != "" {
-				endsSpace = g.Text[len(g.Text)-1] == ' '
-			}
-			prevEnd = g.X + g.Advance
-		}
+		b.WriteString(g.Text)
+		endsSpace = strings.HasSuffix(g.Text, " ")
+		prev = g
 	}
 	return b.String()
 }
 
-// countPages validates the document's page tree and returns its leaf page
-// count, rejecting cyclic or oversized trees before the page walk visits
-// them.
-func countPages(r *object.Reader) (int, error) {
+func listPages(r *object.Reader) ([]object.Value, error) {
 	const (
 		maxDepth = 64
 		maxNodes = 50000
 	)
 	nodes := 0
-	var walk func(v object.Value, depth int) (int, error)
-	walk = func(v object.Value, depth int) (int, error) {
+	hint := r.NumPages()
+	if hint < 0 || hint > maxNodes {
+		hint = 0
+	}
+	pages := make([]object.Value, 0, hint)
+	var walk func(v object.Value, depth int) error
+	walk = func(v object.Value, depth int) error {
 		if depth > maxDepth {
-			return 0, errors.New("pdf: page tree too deep (possible reference cycle)")
+			return errors.New("pdf: page tree too deep (possible reference cycle)")
 		}
 		if nodes++; nodes > maxNodes {
-			return 0, errors.New("pdf: page tree too large")
+			return errors.New("pdf: page tree too large")
 		}
 		switch v.Key("Type").Name() {
 		case "Pages":
 			kids := v.Key("Kids")
-			total := 0
 			for i := range kids.Len() {
-				n, err := walk(kids.Index(i), depth+1)
-				if err != nil {
-					return 0, err
+				if err := walk(kids.Index(i), depth+1); err != nil {
+					return err
 				}
-				total += n
 			}
-			return total, nil
+			return nil
 		case "Page":
-			return 1, nil
+			pages = append(pages, v)
+			return nil
 		}
-		return 0, nil
+		return errors.New("pdf: invalid page-tree node")
 	}
-	return walk(r.Trailer().Key("Root").Key("Pages"), 0)
-}
-
-// extractPage walks a page's content streams, including nested Form
-// XObjects. Malformed streams yield whatever was decoded before the
-// failure.
-func extractPage(p object.Value) []Glyph {
-	w := &walker{}
-	res := object.Inherited(p, "Resources")
-	w.walkStream(p.Key("Contents"), res, gstate{ctm: identity, hscale: 1})
-	return w.glyphs
+	err := walk(r.Trailer().Key("Root").Key("Pages"), 0)
+	if err == nil {
+		err = r.Err()
+	}
+	return pages, err
 }
 
 type matrix [6]float64 // a b c d e f
@@ -266,6 +417,7 @@ type gstate struct {
 }
 
 const maxFormDepth = 8
+const maxWarningsPerPage = 256
 
 // Work budgets per page. Compressed content streams can inflate to
 // hundreds of megabytes of operators (accidental or hostile decompression
@@ -277,158 +429,278 @@ var (
 	maxGlyphsPerPage = 500_000
 )
 
-// errBudgetExceeded aborts a walk through nested Interpret callbacks; it
-// unwinds every walkStream level and is swallowed at the top.
-var errBudgetExceeded = errors.New("pdf: page work budget exceeded")
+var errStopPage = errors.New("pdf: stop extracting page")
 
 type walker struct {
-	glyphs []Glyph
-	depth  int
-	ops    int
+	ctx             context.Context
+	page            int
+	strict          bool
+	limits          Limits
+	resolver        CMapResolver
+	ignoreArtifacts bool
+	foldLigatures   bool
+
+	glyphs   []Glyph
+	warnings []Warning
+	depth    int
+	ops      int
 }
 
-func (w *walker) walkStream(strm, resources object.Value, gs gstate) {
-	// The per-page work budget aborts by panicking errBudgetExceeded; it
-	// must keep unwinding through nested Form XObjects to the top-level
-	// call, where it is swallowed. (The object layer returns errors rather
-	// than panicking, so nothing else reaches here.)
-	defer func() {
-		//nolint:errorlint // identity comparison on a recovered sentinel, never wrapped
-		if r := recover(); r != nil && r == errBudgetExceeded && w.depth > 0 {
-			panic(r)
+func (w *walker) warning(code WarningCode, err error) error {
+	if !w.strict {
+		switch {
+		case len(w.warnings) >= maxWarningsPerPage:
+			return nil
+		case len(w.warnings) == maxWarningsPerPage-1:
+			code = WarningWorkLimit
+			err = errors.New("additional page warnings suppressed")
 		}
-	}()
+	}
+	warning := Warning{Page: w.page, Code: code, Err: err}
+	w.warnings = append(w.warnings, warning)
+	if w.strict {
+		return &StrictError{Warning: warning}
+	}
+	return nil
+}
 
+func (w *walker) stopForLimit(err error) error {
+	if strictErr := w.warning(WarningWorkLimit, err); strictErr != nil {
+		return strictErr
+	}
+	return errStopPage
+}
+
+func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
+	if strm.IsNull() {
+		return nil
+	}
+	if err := w.ctx.Err(); err != nil {
+		return err
+	}
 	fonts := map[string]*fontInfo{}
+	warnedFonts := map[*fontInfo]bool{}
 	var gsStack []gstate
+	var marked []markedContent
 	var decodedBuf []decoded
+	malformedOperators := map[string]bool{}
 	tm, tlm := identity, identity
 
-	show := func(raw []byte) {
+	show := func(raw []byte) error {
 		f := gs.font
 		if f == nil {
-			return
+			return nil
 		}
 		decodedBuf = f.appendDecoded(decodedBuf[:0], raw)
 		trm := mul(tm, gs.ctm)
-		xScale, yScale := scaleX(trm), scaleY(trm)
 		for _, d := range decodedBuf {
+			if len(w.glyphs) >= w.limits.MaxGlyphsPerPage {
+				return w.stopForLimit(errors.New("glyph count exceeds per-page limit"))
+			}
+			if len(w.glyphs)&1023 == 0 {
+				if err := w.ctx.Err(); err != nil {
+					return err
+				}
+			}
+			if d.vertical {
+				adv := d.vm.w1/1000*gs.fontSize + gs.charSp
+				if d.space {
+					adv += gs.wordSp
+				}
+				origin := translated(trm, d.vm.vx/1000*gs.fontSize, d.vm.vy/1000*gs.fontSize+gs.rise)
+				if text := sanitizeText(d.text, w.foldLigatures); text != "" {
+					w.glyphs = append(w.glyphs, positionedVerticalGlyph(text, origin, gs.fontSize, adv))
+				}
+				tm = translated(tm, 0, adv)
+				trm = translated(trm, 0, adv)
+				continue
+			}
 			adv := (d.width/1000*gs.fontSize + gs.charSp) * gs.hscale
 			if d.space {
 				adv += gs.wordSp * gs.hscale
 			}
-			if text := sanitize(d.text); text != "" {
-				w.glyphs = append(w.glyphs, Glyph{
-					Text:    text,
-					X:       trm[4],
-					Y:       trm[5] + gs.rise*yScale,
-					Advance: adv * xScale,
-					Size:    math.Abs(gs.fontSize) * yScale,
-				})
+			if text := sanitizeText(d.text, w.foldLigatures); text != "" {
+				w.glyphs = append(w.glyphs, positionedGlyph(text, trm, gs.fontSize, gs.rise, adv))
 			}
 			tm = translated(tm, adv, 0)
 			trm = translated(trm, adv, 0)
 		}
+		return nil
 	}
 
-	interpretContent(contentBytes(strm), func(op []byte, args []operand) {
-		if w.ops++; w.ops > maxOpsPerPage || len(w.glyphs) > maxGlyphsPerPage {
-			panic(errBudgetExceeded)
+	data, streamErrs := contentBytesLimitError(strm, w.limits.MaxStreamBytes)
+	for _, streamErr := range streamErrs {
+		code := WarningStream
+		if errors.Is(streamErr, safeio.ErrLimitExceeded) {
+			code = WarningStreamLimit
+		}
+		if err := w.warning(code, streamErr); err != nil {
+			return err
+		}
+	}
+
+	malformedOperator := func(op string) error {
+		if malformedOperators[op] {
+			return nil
+		}
+		malformedOperators[op] = true
+		return w.warning(
+			WarningMalformedPage,
+			fmt.Errorf("content operator %q has invalid operands or state", op),
+		)
+	}
+
+	err := interpretContentError(data, func(op []byte, args []operand) error {
+		w.ops++
+		if w.ops > w.limits.MaxOperatorsPerPage {
+			return w.stopForLimit(errors.New("operator count exceeds per-page limit"))
+		}
+		if w.ops&1023 == 0 {
+			if err := w.ctx.Err(); err != nil {
+				return err
+			}
 		}
 		switch string(op) {
 		case "q":
+			if len(args) != 0 {
+				return malformedOperator("q")
+			}
 			gsStack = append(gsStack, gs)
 		case "Q":
+			if len(args) != 0 || len(gsStack) == 0 {
+				return malformedOperator("Q")
+			}
 			if len(gsStack) > 0 {
 				gs = gsStack[len(gsStack)-1]
 				gsStack = gsStack[:len(gsStack)-1]
 			}
 		case "cm":
-			if len(args) == 6 {
-				gs.ctm = mul(matrixFromOperands(args), gs.ctm)
+			if !operandsAre(args, opNum, opNum, opNum, opNum, opNum, opNum) {
+				return malformedOperator("cm")
 			}
+			gs.ctm = mul(matrixFromOperands(args), gs.ctm)
 		case "BT", "ET":
+			if len(args) != 0 {
+				return malformedOperator(string(op))
+			}
 			tm, tlm = identity, identity
 		case "Tf":
-			if len(args) == 2 {
-				gs.font = loadFont(fonts, resources, args[0].name)
-				gs.fontSize = args[1].num
+			if !operandsAre(args, opName, opNum) {
+				return malformedOperator("Tf")
+			}
+			gs.font = loadFont(fonts, resources, args[0].name, w.resolver, w.limits.MaxStreamBytes)
+			gs.fontSize = args[1].num
+			if gs.font != nil && !warnedFonts[gs.font] {
+				warnedFonts[gs.font] = true
+				for _, fontErr := range gs.font.warnings {
+					if err := w.warning(WarningUnsupported, fontErr); err != nil {
+						return err
+					}
+				}
 			}
 		case "Td":
-			if len(args) == 2 {
-				tlm = translated(tlm, args[0].num, args[1].num)
-				tm = tlm
+			if !operandsAre(args, opNum, opNum) {
+				return malformedOperator("Td")
 			}
+			tlm = translated(tlm, args[0].num, args[1].num)
+			tm = tlm
 		case "TD":
-			if len(args) == 2 {
-				gs.leading = -args[1].num
-				tlm = translated(tlm, args[0].num, args[1].num)
-				tm = tlm
+			if !operandsAre(args, opNum, opNum) {
+				return malformedOperator("TD")
 			}
+			gs.leading = -args[1].num
+			tlm = translated(tlm, args[0].num, args[1].num)
+			tm = tlm
 		case "Tm":
-			if len(args) == 6 {
-				tlm = matrixFromOperands(args)
-				tm = tlm
+			if !operandsAre(args, opNum, opNum, opNum, opNum, opNum, opNum) {
+				return malformedOperator("Tm")
 			}
+			tlm = matrixFromOperands(args)
+			tm = tlm
 		case "T*":
+			if len(args) != 0 {
+				return malformedOperator("T*")
+			}
 			tlm = translated(tlm, 0, -gs.leading)
 			tm = tlm
 		case "TL":
-			if len(args) == 1 {
-				gs.leading = args[0].num
+			if !operandsAre(args, opNum) {
+				return malformedOperator("TL")
 			}
+			gs.leading = args[0].num
 		case "Tc":
-			if len(args) == 1 {
-				gs.charSp = args[0].num
+			if !operandsAre(args, opNum) {
+				return malformedOperator("Tc")
 			}
+			gs.charSp = args[0].num
 		case "Tw":
-			if len(args) == 1 {
-				gs.wordSp = args[0].num
+			if !operandsAre(args, opNum) {
+				return malformedOperator("Tw")
 			}
+			gs.wordSp = args[0].num
 		case "Tz":
-			if len(args) == 1 {
-				gs.hscale = args[0].num / 100
+			if !operandsAre(args, opNum) {
+				return malformedOperator("Tz")
 			}
+			gs.hscale = args[0].num / 100
 		case "Ts":
-			if len(args) == 1 {
-				gs.rise = args[0].num
+			if !operandsAre(args, opNum) {
+				return malformedOperator("Ts")
 			}
+			gs.rise = args[0].num
 		case "Tj":
-			if len(args) == 1 {
-				show(args[0].str)
+			if !operandsAre(args, opStr) {
+				return malformedOperator("Tj")
 			}
+			return show(args[0].str)
 		case "'":
-			if len(args) == 1 {
-				tlm = translated(tlm, 0, -gs.leading)
-				tm = tlm
-				show(args[0].str)
+			if !operandsAre(args, opStr) {
+				return malformedOperator("'")
 			}
+			tlm = translated(tlm, 0, -gs.leading)
+			tm = tlm
+			return show(args[0].str)
 		case "\"":
-			if len(args) == 3 {
-				gs.wordSp = args[0].num
-				gs.charSp = args[1].num
-				tlm = translated(tlm, 0, -gs.leading)
-				tm = tlm
-				show(args[2].str)
+			if !operandsAre(args, opNum, opNum, opStr) {
+				return malformedOperator("\"")
 			}
+			gs.wordSp = args[0].num
+			gs.charSp = args[1].num
+			tlm = translated(tlm, 0, -gs.leading)
+			tm = tlm
+			return show(args[2].str)
 		case "TJ":
-			if len(args) == 1 && args[0].kind == opArr {
-				for _, el := range args[0].arr {
-					switch el.kind {
-					case opStr:
-						show(el.str)
-					case opNum:
+			if !validTextArray(args) {
+				return malformedOperator("TJ")
+			}
+			for _, el := range args[0].arr {
+				switch el.kind {
+				case opStr:
+					if err := show(el.str); err != nil {
+						return err
+					}
+				case opNum:
+					if gs.font != nil && gs.font.vertical {
+						adv := -el.num / 1000 * gs.fontSize
+						tm = translated(tm, 0, adv)
+					} else {
 						adv := -el.num / 1000 * gs.fontSize * gs.hscale
 						tm = translated(tm, adv, 0)
 					}
 				}
 			}
 		case "Do":
-			if len(args) != 1 || w.depth >= maxFormDepth {
-				break
+			if !operandsAre(args, opName) {
+				return malformedOperator("Do")
 			}
 			xobj := resources.Key("XObject").Key(args[0].name)
 			if xobj.Kind() != object.Stream || xobj.Key("Subtype").Name() != "Form" {
+				break
+			}
+			if w.depth >= w.limits.MaxFormDepth {
+				if err := w.warning(WarningWorkLimit, errors.New("form XObject nesting exceeds limit")); err != nil {
+					return err
+				}
 				break
 			}
 			sub := gs
@@ -444,10 +716,204 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) {
 				subRes = resources
 			}
 			w.depth++
-			w.walkStream(xobj, subRes, sub)
+			err := w.walkStream(xobj, subRes, sub)
 			w.depth--
+			if err != nil {
+				return err
+			}
+		case "BMC":
+			if !operandsAre(args, opName) {
+				return malformedOperator("BMC")
+			}
+			marked = append(marked, newMarkedContent(args[0].name, operand{}, resources, len(w.glyphs), tm, gs))
+		case "BDC":
+			if len(args) != 2 || args[0].kind != opName ||
+				args[1].kind != opName && args[1].kind != opDict {
+				return malformedOperator("BDC")
+			}
+			marked = append(marked, newMarkedContent(args[0].name, args[1], resources, len(w.glyphs), tm, gs))
+		case "EMC":
+			if len(args) != 0 {
+				return malformedOperator("EMC")
+			}
+			if len(marked) == 0 {
+				return errors.New("marked-content EMC without BMC or BDC")
+			}
+			mark := marked[len(marked)-1]
+			marked = marked[:len(marked)-1]
+			w.finishMarkedContent(mark)
 		}
+		return nil
 	})
+	if err == nil {
+		if len(marked) > 0 {
+			for i := len(marked) - 1; i >= 0; i-- {
+				w.finishMarkedContent(marked[i])
+			}
+			return w.warning(WarningMalformedPage, errors.New("unterminated marked-content sequence"))
+		}
+		return nil
+	}
+	if errors.Is(err, errStopPage) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	var strictErr *StrictError
+	if errors.As(err, &strictErr) {
+		return err
+	}
+	return w.warning(WarningMalformedPage, err)
+}
+
+type markedContent struct {
+	glyphStart int
+	actualText string
+	hasActual  bool
+	artifact   bool
+	tm         matrix
+	gs         gstate
+}
+
+func newMarkedContent(
+	tag string,
+	property operand,
+	resources object.Value,
+	glyphStart int,
+	tm matrix,
+	gs gstate,
+) markedContent {
+	mark := markedContent{
+		glyphStart: glyphStart,
+		artifact:   tag == "Artifact",
+		tm:         tm,
+		gs:         gs,
+	}
+	switch property.kind {
+	case opDict:
+		if actual, ok := property.dict["ActualText"]; ok && actual.kind == opStr {
+			mark.actualText = decodeTextString(actual.str)
+			mark.hasActual = true
+		}
+		if typ, ok := property.dict["Type"]; ok && typ.kind == opName && typ.name == "Artifact" {
+			mark.artifact = true
+		}
+	case opName:
+		value := resources.Key("Properties").Key(property.name)
+		if value.Kind() == object.Dict {
+			actual := value.Key("ActualText")
+			if actual.Kind() == object.String {
+				mark.actualText = decodeTextString([]byte(actual.RawString()))
+				mark.hasActual = true
+			}
+			if value.Key("Type").Name() == "Artifact" {
+				mark.artifact = true
+			}
+		}
+	}
+	return mark
+}
+
+func (w *walker) finishMarkedContent(mark markedContent) {
+	if mark.glyphStart > len(w.glyphs) {
+		return
+	}
+	if mark.artifact && w.ignoreArtifacts {
+		w.glyphs = w.glyphs[:mark.glyphStart]
+		return
+	}
+	if !mark.hasActual {
+		return
+	}
+	replaced := w.glyphs[mark.glyphStart:]
+	w.glyphs = w.glyphs[:mark.glyphStart]
+	if mark.actualText == "" {
+		return
+	}
+	if len(replaced) == 0 {
+		trm := mul(mark.tm, mark.gs.ctm)
+		size := mark.gs.fontSize
+		if size == 0 {
+			size = 1
+		}
+		advance := float64(len([]rune(mark.actualText))) * size * 0.5
+		w.glyphs = append(w.glyphs, positionedGlyph(mark.actualText, trm, size, mark.gs.rise, advance))
+		return
+	}
+	glyph := replaced[0]
+	glyph.Text = mark.actualText
+	last := replaced[len(replaced)-1]
+	glyph.Baseline.End = last.Baseline.End
+	glyph.Advance = math.Hypot(
+		glyph.Baseline.End.X-glyph.Baseline.Start.X,
+		glyph.Baseline.End.Y-glyph.Baseline.Start.Y,
+	)
+	glyph.Quad[1] = last.Quad[1]
+	glyph.Quad[2] = last.Quad[2]
+	w.glyphs = append(w.glyphs, glyph)
+}
+
+func positionedGlyph(text string, trm matrix, fontSize, rise, advance float64) Glyph {
+	xLen := scaleX(trm)
+	yLen := scaleY(trm)
+	xDir := Point{X: 1}
+	if xLen > 0 {
+		xDir = Point{X: trm[0] / xLen, Y: trm[1] / xLen}
+	}
+	riseX := rise * trm[2]
+	riseY := rise * trm[3]
+	start := Point{X: trm[4] + riseX, Y: trm[5] + riseY}
+	end := Point{
+		X: start.X + advance*trm[0],
+		Y: start.Y + advance*trm[1],
+	}
+	if baselineLength := math.Hypot(end.X-start.X, end.Y-start.Y); baselineLength > 0 {
+		xDir = Point{X: (end.X - start.X) / baselineLength, Y: (end.Y - start.Y) / baselineLength}
+	}
+	top := Point{
+		X: start.X + fontSize*trm[2],
+		Y: start.Y + fontSize*trm[3],
+	}
+	topEnd := Point{
+		X: end.X + fontSize*trm[2],
+		Y: end.Y + fontSize*trm[3],
+	}
+	return Glyph{
+		Text:      text,
+		X:         start.X,
+		Y:         start.Y,
+		Advance:   advance * xLen,
+		Size:      math.Abs(fontSize) * yLen,
+		Direction: xDir,
+		Baseline:  Line{Start: start, End: end},
+		Quad:      Quad{start, end, topEnd, top},
+	}
+}
+
+func positionedVerticalGlyph(text string, trm matrix, fontSize, advance float64) Glyph {
+	dx := advance * trm[2]
+	dy := advance * trm[3]
+	length := math.Hypot(dx, dy)
+	direction := Point{Y: -1}
+	if length > 0 {
+		direction = Point{X: dx / length, Y: dy / length}
+	}
+	start := Point{X: trm[4], Y: trm[5]}
+	end := Point{X: start.X + dx, Y: start.Y + dy}
+	halfX := fontSize * trm[0] / 2
+	halfY := fontSize * trm[1] / 2
+	q0 := Point{X: start.X - halfX, Y: start.Y - halfY}
+	q1 := Point{X: end.X - halfX, Y: end.Y - halfY}
+	q2 := Point{X: end.X + halfX, Y: end.Y + halfY}
+	q3 := Point{X: start.X + halfX, Y: start.Y + halfY}
+	return Glyph{
+		Text:      text,
+		X:         start.X,
+		Y:         start.Y,
+		Advance:   length,
+		Size:      math.Abs(fontSize) * scaleX(trm),
+		Direction: direction,
+		Baseline:  Line{Start: start, End: end},
+		Quad:      Quad{q0, q1, q2, q3},
+	}
 }
 
 func matrixFromOperands(args []operand) matrix {
@@ -458,21 +924,49 @@ func matrixFromOperands(args []operand) matrix {
 	return m
 }
 
-// sanitize normalizes decoded glyph text for output. It strips glyphs that
+func operandsAre(args []operand, kinds ...opKind) bool {
+	if len(args) != len(kinds) {
+		return false
+	}
+	for i, kind := range kinds {
+		if args[i].kind != kind {
+			return false
+		}
+	}
+	return true
+}
+
+func validTextArray(args []operand) bool {
+	if !operandsAre(args, opArr) {
+		return false
+	}
+	for _, item := range args[0].arr {
+		if item.kind != opStr && item.kind != opNum {
+			return false
+		}
+	}
+	return true
+}
+
+// sanitize normalizes decoded glyph text using the default ligature-folding
+// behavior. sanitizeText exposes the policy switch used by Options.
+func sanitize(s string) string { return sanitizeText(s, true) }
+
+// sanitizeText normalizes decoded glyph text for output. It strips glyphs that
 // carry no textual meaning — unmapped glyphs (U+FFFD), C0/C1 control
 // characters, private-use icons (icon fonts) — turns non-breaking spaces
-// into plain spaces (some generators join every word with NBSP glyphs), and
-// folds the Latin ligature presentation forms U+FB00–U+FB06 (ﬀ ﬁ ﬂ ﬃ ﬄ ﬅ ﬆ)
-// to their letter sequences. The Adobe Glyph List maps the glyph names
-// /ff /fi /fl /ffi /ffl — which every TeX font's /Differences array uses —
-// to those codepoints, so without folding "file" extracts as "ﬁle" and is
-// invisible to substring search and to tokenizers (SQLite FTS5's unicode61
-// among them) that skip compatibility decomposition; poppler, pdf.js and
-// MuPDF fold the same range.
-func sanitize(s string) string {
+// into plain spaces (some generators join every word with NBSP glyphs), and,
+// when foldLigatures is set, folds the Latin ligature presentation forms
+// U+FB00–U+FB06 (ﬀ ﬁ ﬂ ﬃ ﬄ ﬅ ﬆ) to their letter sequences. The Adobe Glyph
+// List maps the glyph names /ff /fi /fl /ffi /ffl — which every TeX font's
+// /Differences array uses — to those codepoints, so without folding "file"
+// extracts as "ﬁle" and is invisible to substring search and to tokenizers
+// (SQLite FTS5's unicode61 among them) that skip compatibility
+// decomposition; poppler, pdf.js and MuPDF fold the same range.
+func sanitizeText(s string, foldLigatures bool) string {
 	clean := true
 	for _, r := range s {
-		if isJunkRune(r) || r == '\u00a0' || isLigatureRune(r) {
+		if isJunkRune(r) || r == '\u00a0' || foldLigatures && isLigatureRune(r) {
 			clean = false
 			break
 		}
@@ -487,7 +981,7 @@ func sanitize(s string) string {
 		case r == '\u00a0':
 			b.WriteByte(' ')
 		case isJunkRune(r):
-		case isLigatureRune(r):
+		case foldLigatures && isLigatureRune(r):
 			b.WriteString(ligatureLetters[r-0xFB00])
 		default:
 			b.WriteRune(r)
