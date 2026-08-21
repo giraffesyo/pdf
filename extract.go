@@ -108,7 +108,17 @@ type Page struct {
 	OCRGlyphs int
 	// Images holds the images the page paints, in content order, when
 	// Options.IncludeImages is set.
-	Images      []Image
+	Images []Image
+	// ImageCount is how many images the page paints, reported whether or
+	// not their data was read — Images is empty without
+	// Options.IncludeImages, and this is not.
+	//
+	// It is what separates the two reasons a page can yield no glyphs. A
+	// page that paints images is a scan, and an OCR implementation can
+	// read it; a page that paints none has had its text converted to
+	// vector outlines, which needs a renderer instead, or is simply
+	// blank. Nothing else in the result tells those apart.
+	ImageCount  int
 	MediaBox    Rect
 	CropBox     Rect
 	Rotation    int
@@ -349,10 +359,11 @@ func (e *pageExtractor) extract(state *pageState, pageNode object.Value, pageNum
 		err = nil
 	}
 	page.Glyphs = state.glyphs.take()
+	page.ImageCount = w.imageCount
 
 	// Image data is read only once it is known to be wanted: by the
 	// caller, or by the OCR implementation for a page the policy selects.
-	ocr := err == nil && e.opts.OCR != nil && e.ocrSelects(page, len(w.images))
+	ocr := err == nil && e.opts.OCR != nil && e.ocrSelects(page)
 	if err == nil && (e.opts.IncludeImages || ocr) {
 		page.Images, err = w.loadImages()
 	}
@@ -386,13 +397,16 @@ func (e *pageExtractor) extract(state *pageState, pageNode object.Value, pageNum
 	return out
 }
 
-// ocrSelects reports whether the OCR policy asks about a page, given what
-// its content streams yielded: glyphs, and images painted (counted
-// before any were loaded).
-func (e *pageExtractor) ocrSelects(page Page, images int) bool {
+// ocrSelects reports whether OCR is asked about a page, given what its
+// content streams yielded: its glyphs, and how many images it paints
+// (counted before any were loaded, so Page.Images is still empty here).
+func (e *pageExtractor) ocrSelects(page Page) bool {
+	if selects := e.opts.OCRSelect; selects != nil {
+		return selects(page)
+	}
 	switch e.opts.OCRPolicy {
 	case OCRImagePages:
-		return images > 0
+		return page.ImageCount > 0
 	case OCRAllPages:
 		return true
 	default:
@@ -782,8 +796,11 @@ type walker struct {
 
 	// collectImages records image paintings in images, for Page.Images or
 	// an OCR request; their data is read afterwards by loadImages.
+	// imageCount counts them either way, and so is kept separately: it
+	// is reported for every page, and images is not.
 	collectImages bool
 	images        []pageImage
+	imageCount    int
 }
 
 // docScratch holds buffers that page walks reuse across the pages of a
@@ -1238,11 +1255,15 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 // points into the content buffer, which is reused for the next page, so
 // it is copied now.
 func (w *walker) recordImage(img pageImage) error {
+	// The limit is applied before the count so that a page reports the
+	// same number of images however it was extracted: bounding only the
+	// collected ones would make ImageCount depend on IncludeImages.
+	if w.imageCount >= w.limits.MaxImagesPerPage {
+		return w.stopForLimit(errors.New("image count exceeds per-page limit"))
+	}
+	w.imageCount++
 	if !w.collectImages {
 		return nil
-	}
-	if len(w.images) >= w.limits.MaxImagesPerPage {
-		return w.stopForLimit(errors.New("image count exceeds per-page limit"))
 	}
 	if img.inline.data != nil {
 		img.inline.data = bytes.Clone(img.inline.data)

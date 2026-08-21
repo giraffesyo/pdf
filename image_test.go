@@ -776,3 +776,65 @@ func FuzzExtractImages(f *testing.F) {
 		}
 	})
 }
+
+// Page.ImageCount is what separates a scanned page from one whose text
+// became vector outlines. Both yield no glyphs, and only one of them is
+// worth handing to an OCR engine, so the count is reported whether or
+// not the data behind it was read.
+func TestPageImageCount(t *testing.T) {
+	twice := imageDoc(strings.Repeat("/Im1 Do ", 2), grayImageObj(1, 1, "\x00", ""))
+
+	t.Run("without image data", func(t *testing.T) {
+		doc, err := extractOptions(t, twice, Options{})
+		if err != nil {
+			t.Fatalf("extract: %v", err)
+		}
+		page := doc.Pages[0]
+		if page.ImageCount != 2 {
+			t.Errorf("ImageCount = %d, want 2", page.ImageCount)
+		}
+		// Counting must not start reading what nobody asked for.
+		if len(page.Images) != 0 {
+			t.Errorf("Images = %d, want none without IncludeImages", len(page.Images))
+		}
+	})
+
+	t.Run("with image data", func(t *testing.T) {
+		doc, err := extractOptions(t, twice, Options{IncludeImages: true})
+		if err != nil {
+			t.Fatalf("extract: %v", err)
+		}
+		if page := doc.Pages[0]; page.ImageCount != 2 || len(page.Images) != 2 {
+			t.Errorf("ImageCount = %d, Images = %d, want 2 and 2", page.ImageCount, len(page.Images))
+		}
+	})
+
+	t.Run("page painting none", func(t *testing.T) {
+		doc, err := extractOptions(t, imageDoc("", grayImageObj(1, 1, "\x00", "")), Options{})
+		if err != nil {
+			t.Fatalf("extract: %v", err)
+		}
+		// The image is in the page's resources but never painted.
+		if got := doc.Pages[0].ImageCount; got != 0 {
+			t.Errorf("ImageCount = %d, want 0", got)
+		}
+	})
+
+	// A count that depended on IncludeImages would be a count a caller
+	// could not compare across extractions.
+	t.Run("bounded the same either way", func(t *testing.T) {
+		data := imageDoc(strings.Repeat("/Im1 Do ", 5), grayImageObj(1, 1, "\x00", ""))
+		for _, include := range []bool{false, true} {
+			doc, err := extractOptions(t, data, Options{IncludeImages: include, Limits: Limits{MaxImagesPerPage: 3}})
+			if err != nil {
+				t.Fatalf("IncludeImages=%v: %v", include, err)
+			}
+			if got := doc.Pages[0].ImageCount; got != 3 {
+				t.Errorf("IncludeImages=%v: ImageCount = %d, want 3", include, got)
+			}
+			if !hasWarning(doc.Warnings, WarningWorkLimit) {
+				t.Errorf("IncludeImages=%v: warnings = %v, want the work limit reported", include, doc.Warnings)
+			}
+		}
+	})
+}
