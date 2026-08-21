@@ -159,26 +159,14 @@ func writeLayoutLine(b *strings.Builder, line layoutLine) {
 	}
 }
 
-func glyphDirection(g Glyph) Point {
-	start, end := g.Baseline.Start, g.Baseline.End
-	dx, dy := end.X-start.X, end.Y-start.Y
-	if length := math.Hypot(dx, dy); length > 1e-9 {
-		return Point{X: dx / length, Y: dy / length}
-	}
-	if length := math.Hypot(g.Direction.X, g.Direction.Y); length > 1e-9 {
-		return Point{X: g.Direction.X / length, Y: g.Direction.Y / length}
-	}
-	return Point{X: 1}
-}
+func glyphDirection(g Glyph) Point { return g.direction() }
 
+// glyphBaseline is Baseline for a direction already computed by the
+// caller, which every layout pass holds for the line being built.
 func glyphBaseline(g Glyph, dir Point) (Point, Point) {
-	start, end := g.Baseline.Start, g.Baseline.End
-	if start != (Point{}) || end != (Point{}) {
-		return start, end
-	}
-	start = Point{X: g.X, Y: g.Y}
-	end = Point{X: g.X + dir.X*g.Advance, Y: g.Y + dir.Y*g.Advance}
-	return start, end
+	length := math.Abs(g.Advance)
+	start := Point{X: g.X, Y: g.Y}
+	return start, Point{X: start.X + dir.X*length, Y: start.Y + dir.Y*length}
 }
 
 func glyphProjection(g Glyph, dir Point, end bool) float64 {
@@ -286,22 +274,19 @@ func (p Page) TextIn(region Rect, layout LayoutOptions) string {
 }
 
 func glyphRect(g Glyph) Rect {
-	if g.Quad != (Quad{}) {
-		rect := Rect{
-			MinX: math.MaxFloat64,
-			MinY: math.MaxFloat64,
-			MaxX: -math.MaxFloat64,
-			MaxY: -math.MaxFloat64,
-		}
-		for _, point := range g.Quad {
-			rect.MinX = min(rect.MinX, point.X)
-			rect.MinY = min(rect.MinY, point.Y)
-			rect.MaxX = max(rect.MaxX, point.X)
-			rect.MaxY = max(rect.MaxY, point.Y)
-		}
-		return rect
+	rect := Rect{
+		MinX: math.MaxFloat64,
+		MinY: math.MaxFloat64,
+		MaxX: -math.MaxFloat64,
+		MaxY: -math.MaxFloat64,
 	}
-	return Rect{MinX: g.X, MinY: g.Y, MaxX: g.X + g.Advance, MaxY: g.Y + g.Size}
+	for _, point := range g.Quad() {
+		rect.MinX = min(rect.MinX, point.X)
+		rect.MinY = min(rect.MinY, point.Y)
+		rect.MaxX = max(rect.MaxX, point.X)
+		rect.MaxY = max(rect.MaxY, point.Y)
+	}
+	return rect
 }
 
 func rectsIntersect(a, b Rect) bool {
