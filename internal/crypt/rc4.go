@@ -6,9 +6,9 @@ import (
 )
 
 // newRC4orAES handles the standard handler revisions 2-4 (RC4 and, via V4
-// crypt filters, AES-128). It authenticates the empty user password, then
-// the empty owner password, deriving the file key with Algorithm 2.
-func newRC4orAES(c Config) (*Decryptor, error) {
+// crypt filters, AES-128). It authenticates the supplied user password, then
+// the supplied owner password, deriving the file key with Algorithm 2.
+func newRC4orAES(c Config, password []byte) (*Decryptor, error) {
 	keyLen := 5
 	if c.R >= 3 && c.Length >= 40 {
 		keyLen = c.Length / 8
@@ -17,12 +17,12 @@ func newRC4orAES(c Config) (*Decryptor, error) {
 		keyLen = 5
 	}
 
-	// Try the empty user password (Algorithm 2 with the pad as password).
-	key := fileKeyRC4(passwordPad, c, keyLen)
+	// Try the supplied user password (Algorithm 2).
+	key := fileKeyRC4(password, c, keyLen)
 	if !userKeyValid(key, c) {
-		// Fall back to the empty owner password (Algorithm 7): recover the
+		// Fall back to the supplied owner password (Algorithm 7): recover the
 		// user password from /O, then re-derive and re-check.
-		if userPw, ok := ownerRecoverUserPw(passwordPad, c, keyLen); ok {
+		if userPw, ok := ownerRecoverUserPw(password, c, keyLen); ok {
 			key = fileKeyRC4(userPw, c, keyLen)
 			if !userKeyValid(key, c) {
 				return nil, ErrPasswordRequired
@@ -82,8 +82,7 @@ func userKeyValid(key []byte, c Config) bool {
 }
 
 // ownerRecoverUserPw implements Algorithm 7: derive the RC4 key from the
-// (empty) owner password and use it to decrypt /O back to the user
-// password.
+// supplied owner password and use it to decrypt /O back to the user password.
 func ownerRecoverUserPw(ownerPw []byte, c Config, keyLen int) ([]byte, bool) {
 	if len(c.O) < 32 {
 		return nil, false

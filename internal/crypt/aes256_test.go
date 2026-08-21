@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"errors"
 	"fmt"
 	"testing"
 )
@@ -12,23 +13,46 @@ import (
 // key and empty passwords, mirroring the encryption side of ISO 32000-2
 // §7.6.4.4.
 func buildAES256(t *testing.T, r int, fileKey []byte) Config {
+	return buildAES256Pw(t, r, fileKey, nil, nil)
+}
+
+func buildAES256Pw(t *testing.T, r int, fileKey, userPassword, ownerPassword []byte) Config {
 	t.Helper()
-	empty := []byte{}
 	uValSalt := bytes.Repeat([]byte{0x11}, 8)
 	uKeySalt := bytes.Repeat([]byte{0x22}, 8)
-	u := append(append(hash2B(empty, uValSalt, nil, r), uValSalt...), uKeySalt...)
-	ue := aesNoPadEncrypt(hash2B(empty, uKeySalt, nil, r), fileKey)
+	u := append(append(hash2B(userPassword, uValSalt, nil, r), uValSalt...), uKeySalt...)
+	ue := aesNoPadEncrypt(hash2B(userPassword, uKeySalt, nil, r), fileKey)
 
 	oValSalt := bytes.Repeat([]byte{0x33}, 8)
 	oKeySalt := bytes.Repeat([]byte{0x44}, 8)
-	o := append(append(hash2B(empty, oValSalt, u[:48], r), oValSalt...), oKeySalt...)
-	oe := aesNoPadEncrypt(hash2B(empty, oKeySalt, u[:48], r), fileKey)
+	o := append(append(hash2B(ownerPassword, oValSalt, u[:48], r), oValSalt...), oKeySalt...)
+	oe := aesNoPadEncrypt(hash2B(ownerPassword, oKeySalt, u[:48], r), fileKey)
 
 	return Config{
 		Filter: "Standard", V: 5, R: r, Length: 256, P: -4, EncryptMeta: true,
 		U: u, O: o, UE: ue, OE: oe, ID: testID,
 		StmF: "StdCF", StrF: "StdCF",
 		CF: map[string]Filter{"StdCF": {CFM: "AESV3", Length: 32}},
+	}
+}
+
+func TestAES256NonEmptyPasswords(t *testing.T) {
+	fileKey := bytes.Repeat([]byte{0x6B}, 32)
+	for _, revision := range []int{5, 6} {
+		cfg := buildAES256Pw(t, revision, fileKey, []byte("user secret"), []byte("owner secret"))
+		for _, password := range []string{"user secret", "owner secret"} {
+			decryptor, err := NewWithPassword(cfg, []byte(password))
+			if err != nil {
+				t.Fatalf("R%d password %q: %v", revision, password, err)
+			}
+			plain := []byte("protected")
+			if got := decryptor.DecryptStreamData(1, 0, aesEncrypt(fileKey, plain)); !bytes.Equal(got, plain) {
+				t.Fatalf("R%d password %q decrypted %q", revision, password, got)
+			}
+		}
+		if _, err := NewWithPassword(cfg, []byte("wrong")); !errors.Is(err, ErrPasswordRequired) {
+			t.Fatalf("R%d wrong password error = %v", revision, err)
+		}
 	}
 }
 

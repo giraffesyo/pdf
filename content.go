@@ -2,6 +2,8 @@ package pdf
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/giraffesyo/pdf/internal/object"
@@ -34,72 +36,106 @@ type operand struct {
 	str  []byte
 	name string
 	arr  []operand
+	dict map[string]operand
 }
 
 const (
-	maxStreamBytes = safeio.MaxStreamBytes
 	maxOperandNest = 64
 	maxStackDepth  = 4096
 )
 
 // readStreamBounded reads a stream's decoded bytes with a total-size cap
 // and a stall guard (a filter reader that keeps returning (0, nil) would
-// otherwise loop io.ReadAll forever). A non-stream value, or a stream
-// whose filter chain errors, yields nil.
-func readStreamBounded(v object.Value) []byte {
-	return readStreamBoundedLimit(v, maxStreamBytes)
-}
-
-func readStreamBoundedLimit(v object.Value, limit int) []byte {
+// otherwise loop io.ReadAll forever). It returns any decoded prefix together
+// with a non-nil error when decoding fails or the limit is exceeded.
+func readStreamBoundedLimitError(v object.Value, limit int) ([]byte, error) {
 	if v.Kind() != object.Stream {
-		return nil
+		return nil, errors.New("content value is not a stream")
 	}
 	rc, err := v.Reader()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer func() { _ = rc.Close() }() // read-only handle
-	return safeio.ReadAllGuardedLimit(rc, limit)
+	return safeio.ReadAllGuardedLimitError(rc, limit)
 }
 
 // contentBytes returns the page's full content: /Contents may be a single
 // stream or an array of streams that form one logical stream.
-func contentBytes(contents object.Value) []byte {
-	return contentBytesLimit(contents, maxStreamBytes)
+func contentBytesLimit(contents object.Value, limit int) []byte {
+	data, _ := contentBytesLimitError(contents, limit)
+	return data
 }
 
-func contentBytesLimit(contents object.Value, limit int) []byte {
+func contentBytesLimitError(contents object.Value, limit int) ([]byte, []error) {
 	if limit <= 0 {
-		return nil
+		return nil, nil
 	}
 	if contents.Kind() == object.Array {
 		var data []byte
+		var errs []error
+		processed := 0
 		for i := 0; i < contents.Len() && len(data) < limit; i++ {
+			processed = i + 1
 			remaining := limit - len(data)
-			data = append(data, readStreamBoundedLimit(contents.Index(i), remaining)...)
+			part, err := readStreamBoundedLimitError(contents.Index(i), remaining)
+			data = append(data, part...)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("content stream %d: %w", i+1, err))
+			}
 			if len(data) < limit {
 				data = append(data, '\n')
 			}
 		}
-		return data
+		if processed < contents.Len() {
+			errs = appendLimitError(errs)
+		}
+		return data, errs
 	}
-	return readStreamBoundedLimit(contents, limit)
+	data, err := readStreamBoundedLimitError(contents, limit)
+	if err != nil {
+		return data, []error{err}
+	}
+	return data, nil
+}
+
+func appendLimitError(errs []error) []error {
+	for _, err := range errs {
+		if errors.Is(err, safeio.ErrLimitExceeded) {
+			return errs
+		}
+	}
+	return append(errs, safeio.ErrLimitExceeded)
 }
 
 type contentLexer struct {
 	data []byte
 	i    int
+	err  error
+}
+
+func (lx *contentLexer) setErr(err error) {
+	if lx.err == nil {
+		lx.err = err
+	}
 }
 
 // interpretContent executes the operator stream: operands accumulate on a
 // stack; each operator keyword invokes do and clears the stack.
 func interpretContent(data []byte, do func(op []byte, args []operand)) {
+	_ = interpretContentError(data, func(op []byte, args []operand) error {
+		do(op, args)
+		return nil
+	})
+}
+
+func interpretContentError(data []byte, do func(op []byte, args []operand) error) error {
 	lx := &contentLexer{data: data}
 	var stack []operand
 	for lx.i < len(lx.data) {
 		lx.skipSpace()
 		if lx.i >= len(lx.data) {
-			return
+			return lx.err
 		}
 		c := lx.data[lx.i]
 		switch {
@@ -108,9 +144,12 @@ func interpretContent(data []byte, do func(op []byte, args []operand)) {
 			if v, ok := lx.readOperand(0); ok {
 				if len(stack) < maxStackDepth {
 					stack = append(stack, v)
+				} else {
+					lx.setErr(errors.New("content operand stack exceeds limit"))
 				}
 			}
 		case c == ']' || c == '>' || c == ')' || c == '}':
+			lx.setErr(fmt.Errorf("stray content delimiter %q", c))
 			lx.i++ // stray closer in malformed content
 		default:
 			kw := lx.readKeyword()
@@ -125,11 +164,14 @@ func interpretContent(data []byte, do func(op []byte, args []operand)) {
 				lx.skipInlineImage()
 				stack = stack[:0]
 			default:
-				do(kw, stack)
+				if err := do(kw, stack); err != nil {
+					return err
+				}
 				stack = stack[:0]
 			}
 		}
 	}
+	return lx.err
 }
 
 func (lx *contentLexer) skipSpace() {
@@ -167,6 +209,7 @@ func (lx *contentLexer) readOperand(depth int) (operand, bool) {
 		return operand{}, false
 	}
 	if depth > maxOperandNest {
+		lx.setErr(errors.New("content operand nesting exceeds limit"))
 		lx.i++
 		return operand{}, false
 	}
@@ -260,6 +303,7 @@ func (lx *contentLexer) readLiteralString() []byte {
 		}
 	}
 	raw := lx.data[start:]
+	lx.setErr(errors.New("unterminated literal string in content stream"))
 	if escaped {
 		return decodeLiteralString(raw)
 	}
@@ -336,6 +380,8 @@ func (lx *contentLexer) readHexString() []byte {
 	}
 	if lx.i < len(lx.data) {
 		lx.i++ // consume '>'
+	} else {
+		lx.setErr(errors.New("unterminated hexadecimal string in content stream"))
 	}
 	if haveHi {
 		out = append(out, hi<<4)
@@ -346,6 +392,7 @@ func (lx *contentLexer) readHexString() []byte {
 func (lx *contentLexer) readArray(depth int) (operand, bool) {
 	lx.i++ // consume '['
 	arr := operand{kind: opArr}
+	closed := false
 	for lx.i < len(lx.data) {
 		lx.skipSpace()
 		if lx.i >= len(lx.data) {
@@ -353,6 +400,7 @@ func (lx *contentLexer) readArray(depth int) (operand, bool) {
 		}
 		if lx.data[lx.i] == ']' {
 			lx.i++
+			closed = true
 			break
 		}
 		before := lx.i
@@ -363,33 +411,55 @@ func (lx *contentLexer) readArray(depth int) (operand, bool) {
 			lx.i++ // always advance
 		}
 	}
+	if !closed {
+		lx.setErr(errors.New("unterminated array in content stream"))
+	}
 	return arr, true
 }
 
-// readDict consumes a << ... >> dictionary, discarding its contents.
 func (lx *contentLexer) readDict(depth int) (operand, bool) {
 	lx.i += 2 // consume '<<'
+	out := operand{kind: opDict, dict: map[string]operand{}}
 	for lx.i < len(lx.data) {
 		lx.skipSpace()
 		if lx.i+1 < len(lx.data) && lx.data[lx.i] == '>' && lx.data[lx.i+1] == '>' {
 			lx.i += 2
-			return operand{kind: opDict}, true
+			return out, true
 		}
 		if lx.i >= len(lx.data) {
 			break
 		}
 		before := lx.i
-		if lx.data[lx.i] == '/' || lx.data[lx.i] == '(' || lx.data[lx.i] == '<' ||
-			lx.data[lx.i] == '[' || lx.data[lx.i] == '{' {
-			lx.readOperand(depth + 1)
-		} else {
+		switch lx.data[lx.i] {
+		case '/':
+			key := lx.readName()
+			lx.skipSpace()
+			if lx.i < len(lx.data) && (lx.data[lx.i] == '/' || lx.data[lx.i] == '(' ||
+				lx.data[lx.i] == '<' || lx.data[lx.i] == '[' || lx.data[lx.i] == '{' ||
+				lx.data[lx.i] == '+' || lx.data[lx.i] == '-' || lx.data[lx.i] == '.' ||
+				lx.data[lx.i] >= '0' && lx.data[lx.i] <= '9') {
+				if value, ok := lx.readOperand(depth + 1); ok {
+					out.dict[key] = value
+				}
+			} else if kw := lx.readKeyword(); len(kw) > 0 {
+				switch string(kw) {
+				case "true", "false":
+					out.dict[key] = operand{kind: opBool}
+				case "null":
+					out.dict[key] = operand{kind: opNull}
+				}
+			}
+		case '(', '<', '[', '{':
+			_, _ = lx.readOperand(depth + 1)
+		default:
 			lx.readKeyword()
 		}
 		if lx.i == before {
 			lx.i++
 		}
 	}
-	return operand{kind: opDict}, true
+	lx.setErr(errors.New("unterminated dictionary in content stream"))
+	return out, true
 }
 
 // readProc consumes a { ... } PostScript procedure (Type 4 functions).
@@ -411,6 +481,7 @@ func (lx *contentLexer) readProc() operand {
 		}
 		lx.i++
 	}
+	lx.setErr(errors.New("unterminated procedure in content stream"))
 	return operand{kind: opProc}
 }
 
@@ -446,6 +517,7 @@ func (lx *contentLexer) readKeyword() []byte {
 // a dictionary, the ID keyword, then raw binary data no lexer can parse.
 func (lx *contentLexer) skipInlineImage() {
 	// Consume dictionary entries until the ID keyword.
+	foundData := false
 	for lx.i < len(lx.data) {
 		lx.skipSpace()
 		if lx.i >= len(lx.data) {
@@ -456,11 +528,16 @@ func (lx *contentLexer) skipInlineImage() {
 			lx.readOperand(0)
 		} else if kw := lx.readKeyword(); len(kw) == 2 && kw[0] == 'I' && kw[1] == 'D' {
 			lx.i++ // the single whitespace byte after ID
+			foundData = true
 			break
 		}
 		if lx.i == before {
 			lx.i++
 		}
+	}
+	if !foundData {
+		lx.setErr(errors.New("inline image missing ID marker"))
+		return
 	}
 	// Scan for whitespace-delimited EI.
 	for ; lx.i+1 < len(lx.data); lx.i++ {
@@ -476,4 +553,5 @@ func (lx *contentLexer) skipInlineImage() {
 		}
 	}
 	lx.i = len(lx.data)
+	lx.setErr(errors.New("inline image missing EI marker"))
 }

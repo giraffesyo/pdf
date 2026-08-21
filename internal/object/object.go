@@ -83,6 +83,16 @@ type Value struct {
 	owner ref // object this value was parsed from, for decryption context
 }
 
+// ObjectNumber returns the indirect object number represented by v. Direct
+// values have no object number.
+func (v Value) ObjectNumber() (int, bool) {
+	ref, ok := v.data.(ref)
+	if !ok {
+		return 0, false
+	}
+	return ref.num, true
+}
+
 // data holds the concrete Go representation:
 //
 //	nil        Null

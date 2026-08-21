@@ -40,6 +40,12 @@ func New(base string, diffs map[byte]string) *Encoding {
 		t = &macRomanTable
 	case "PDFDocEncoding":
 		t = &pdfDocTable
+	case "SymbolEncoding":
+		table := symbolEncodingTable()
+		t = &table
+	case "ZapfDingbatsEncoding":
+		table := zapfDingbatsTable()
+		t = &table
 	}
 	return &Encoding{table: t, diff: diffs}
 }

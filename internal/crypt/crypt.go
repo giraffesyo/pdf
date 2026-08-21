@@ -1,8 +1,6 @@
 // Package crypt implements the PDF standard security handler (ISO 32000-1
 // §7.6.3 and ISO 32000-2 §7.6.4): RC4 and AES stream/string decryption
-// with the file key derived from an empty user or owner password. It is
-// the transparent-open path — documents that ask for a real password
-// return ErrPasswordRequired.
+// with the file key derived from a supplied user or owner password.
 //
 // The package is value-agnostic: callers extract the /Encrypt dictionary
 // and the /ID into a Config.
@@ -21,8 +19,8 @@ import (
 	"github.com/giraffesyo/pdf/internal/safeio"
 )
 
-// ErrPasswordRequired means neither the empty user nor the empty owner
-// password unlocked the document.
+// ErrPasswordRequired means the supplied password matched neither the user
+// nor the owner password.
 var ErrPasswordRequired = errors.New("pdf: encrypted document requires a password")
 
 // Method is the cipher applied to a string or stream.
@@ -71,17 +69,22 @@ var passwordPad = []byte{
 	0x2F, 0x0C, 0xA9, 0xFE, 0x64, 0x53, 0x69, 0x7A,
 }
 
-// New authenticates the empty password and derives the file key. It fails
-// with ErrPasswordRequired when the document needs a real one.
+// New authenticates the empty password and derives the file key.
 func New(c Config) (*Decryptor, error) {
+	return NewWithPassword(c, nil)
+}
+
+// NewWithPassword authenticates password as either the user or owner password
+// and derives the file key.
+func NewWithPassword(c Config, password []byte) (*Decryptor, error) {
 	if c.Filter != "" && c.Filter != "Standard" {
 		return nil, fmt.Errorf("pdf: unsupported security handler /%s", c.Filter)
 	}
 	switch {
 	case c.V >= 5 || c.R >= 5:
-		return newAES256(c)
+		return newAES256(c, password)
 	case c.V >= 1 && c.V <= 4:
-		return newRC4orAES(c)
+		return newRC4orAES(c, password)
 	default:
 		return nil, fmt.Errorf("pdf: unsupported /Encrypt version V=%d R=%d", c.V, c.R)
 	}

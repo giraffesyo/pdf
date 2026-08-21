@@ -10,27 +10,30 @@ import (
 )
 
 // newAES256 handles the AES-256 standard handler (revisions 5 and 6, ISO
-// 32000-2 §7.6.4.3.4). It authenticates the empty user password, then the
-// empty owner password, and unwraps the file key from /UE or /OE.
-func newAES256(c Config) (*Decryptor, error) {
+// 32000-2 §7.6.4.3.4). It authenticates the supplied user password, then the
+// supplied owner password, and unwraps the file key from /UE or /OE.
+func newAES256(c Config, password []byte) (*Decryptor, error) {
 	if len(c.U) < 48 || len(c.O) < 48 {
 		return nil, ErrPasswordRequired
 	}
-	empty := []byte{}
+	// Revisions 5 and 6 use the UTF-8 password bytes, truncated to 127 bytes.
+	if len(password) > 127 {
+		password = password[:127]
+	}
 	uHash, uValSalt, uKeySalt := c.U[:32], c.U[32:40], c.U[40:48]
 
-	// Empty user password.
-	if bytes.Equal(hash2B(empty, uValSalt, nil, c.R), uHash) {
-		ik := hash2B(empty, uKeySalt, nil, c.R)
+	// User password.
+	if bytes.Equal(hash2B(password, uValSalt, nil, c.R), uHash) {
+		ik := hash2B(password, uKeySalt, nil, c.R)
 		if key := aesNoPadCBC(ik, c.UE); key != nil {
 			return &Decryptor{key: key, stmF: AESV3, strF: AESV3}, nil
 		}
 	}
 
-	// Empty owner password: its salts hash together with the full 48-byte /U.
+	// Owner password: its salts hash together with the full 48-byte /U.
 	oHash, oValSalt, oKeySalt := c.O[:32], c.O[32:40], c.O[40:48]
-	if bytes.Equal(hash2B(empty, oValSalt, c.U[:48], c.R), oHash) {
-		ik := hash2B(empty, oKeySalt, c.U[:48], c.R)
+	if bytes.Equal(hash2B(password, oValSalt, c.U[:48], c.R), oHash) {
+		ik := hash2B(password, oKeySalt, c.U[:48], c.R)
 		if key := aesNoPadCBC(ik, c.OE); key != nil {
 			return &Decryptor{key: key, stmF: AESV3, strF: AESV3}, nil
 		}

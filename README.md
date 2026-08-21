@@ -17,13 +17,60 @@ if err != nil { ... }
 text := doc.Text()             // whole document, plain text
 page := doc.Pages[0]
 line := page.Text()            // per-page reconstruction
-glyphs := page.Glyphs          // []Glyph{Text, X, Y, Advance, Size}
+glyphs := page.Glyphs          // text, quad, baseline, direction, size
 ```
 
-`Page.Text` reconstructs reading order from glyph positions: lines are
-clustered by baseline, and word boundaries are recovered from glyph gaps
-and font metrics — so PDFs that encode no space characters at all still
-come out readable.
+`Page.Text` reconstructs reading order from direction-aware glyph baselines,
+and word boundaries are recovered from glyph gaps and font metrics — so PDFs
+that encode no space characters at all still come out readable. Rotated and
+vertical runs retain their reading direction. `Page.TextIn` and
+`Page.GlyphsIn` extract a rectangular region.
+
+## Extraction options and diagnostics
+
+`Extract` is the permissive, all-pages convenience API. `ExtractWithOptions`
+adds passwords, page ranges, strict mode, configurable resource limits,
+artifact filtering, layout strategies, named CMap resolution, document
+extras, and an optional OCR handoff:
+
+```go
+doc, err := pdf.ExtractWithOptions(ctx, readerAt, size, pdf.Options{
+    Password: "secret",
+    Pages:    []pdf.PageRange{{First: 2, Last: 5}},
+    Strict:   true,
+    Layout:   pdf.LayoutOptions{Mode: pdf.LayoutColumns},
+
+    IgnoreArtifacts:    true,
+    IncludeMetadata:    true,
+    IncludeOutlines:    true,
+    IncludeAnnotations: true,
+    IncludeFormValues:  true,
+})
+```
+
+Ligature presentation forms (`ﬁ`, `ﬂ`, `ﬀ`, `ﬃ`, `ﬄ`, `ﬅ`, `ﬆ`) fold to their
+letter sequences by default, as `pdftotext` and pdf.js do, so extracted text
+stays searchable; set `PreserveLigatures: true` to keep the raw codepoints.
+
+Permissive extraction retains recoverable output and records conditions that
+may have made it incomplete in `Document.Warnings` and `Page.Warnings`.
+Strict mode returns the partial document with a `*pdf.StrictError` at the first
+such condition. `pdf.ErrPasswordRequired` is available for `errors.Is`.
+
+For large files, `ExtractPages` invokes a callback one page at a time and does
+not retain page glyphs in the returned document:
+
+```go
+summary, err := pdf.ExtractPages(ctx, readerAt, size, opts, func(page pdf.Page) error {
+    consume(page)
+    return nil
+})
+```
+
+The core remains dependency-free. Applications can implement `pdf.OCR` to
+handle pages whose content streams produce no text. The callback receives the
+original `io.ReaderAt`, file size, page number, and page geometry, so it can
+invoke the renderer/OCR engine appropriate for the application.
 
 ## Why another PDF text extractor
 
@@ -47,8 +94,9 @@ external dependencies**: the object layer (cross-reference tables and
 streams, object streams, hybrid references, stream filters, and
 standard-handler decryption), the standard font encodings and Adobe Glyph
 List, and everything from the content stream down — lexer, interpreter,
-text state machine, CTM/Form-XObject handling, ToUnicode parsing, CID
-widths.
+text state machine, CTM/Form-XObject handling, variable-width ToUnicode and
+encoding CMaps, horizontal/vertical CID metrics, embedded TrueType/CFF/Type1
+fallbacks, and tagged-PDF `/ActualText`.
 
 Undecodable glyphs (no ToUnicode, no standard encoding) are **dropped, not
 emitted as garbage**, so image-only or outlined-text PDFs yield empty
@@ -62,13 +110,15 @@ searchable.
 ## Limitations
 
 - No OCR: scanned pages and text converted to vector outlines have no text
-  to extract.
-- No layout analysis beyond line/word reconstruction: complex multi-column
-  layouts may interleave.
-- Encrypted files open only when the empty user or owner password unlocks
-  them (RC4, AES-128, AES-256); password-protected files return an error.
+  to extract unless the caller supplies an `OCR` implementation.
+- Layout reconstruction is heuristic. Direction-aware, content-order, and
+  column modes are available, but highly irregular tables may still require
+  application-specific analysis of glyph quads.
+- `Identity-H` and `Identity-V` CMaps are built in. Other named predefined
+  CMaps are loaded through `Options.CMapResolver`; embedded CMap streams and
+  `usecmap` inheritance are parsed natively.
 - Image filters (DCT/JPX/CCITT/JBIG2) are not decoded — text extraction
-  never needs them.
+  itself does not need them. An OCR implementation may use its own renderer.
 
 ## Benchmarks
 
@@ -81,7 +131,7 @@ whether extraction completes safely. A comparator that returns incorrect
 text, errors, or panics is excluded from the performance run for that
 fixture.
 
-Results below were measured on 2026-07-15 from the current worktree based
+Results below were measured on 2026-07-23 from the current worktree based
 on commit `4d13aa9`, using Go `1.26.4` on macOS `26.5.1` (`darwin/arm64`,
 Apple M5 Pro). Values are one run of
 `go test -bench . -benchmem -run '^$' -count=1 ./...`; rerun on your own
@@ -100,23 +150,23 @@ Latency (`ns/op`):
 
 | Corpus | this package | ledongthuc/pdf |
 |---|---:|---:|
-| simple | 12,548 | 29,796 |
-| Form XObject | 15,342 | incorrect text |
-| Flate content | 20,080 | 41,339 |
-| xref stream | 13,168 | 26,940 |
-| object stream | 19,330 | 47,061 |
-| RC4-encrypted | 61,169 | unsupported |
+| simple | 13,306 | 14,478 |
+| Form XObject | 16,187 | incorrect text |
+| Flate content | 20,431 | 20,407 |
+| xref stream | 13,879 | 14,337 |
+| object stream | 14,702 | 22,756 |
+| RC4-encrypted | 34,550 | unsupported |
 
 Memory (`B/op`) and allocations (`allocs/op`):
 
 | Corpus | this package B/op | ledongthuc/pdf B/op | this package allocs/op | ledongthuc/pdf allocs/op |
 |---|---:|---:|---:|---:|
-| simple | 53,120 | 62,963 | 153 | 368 |
-| Form XObject | 57,480 | incorrect text | 198 | incorrect text |
-| Flate content | 98,553 | 107,891 | 171 | 386 |
-| xref stream | 54,008 | 62,882 | 157 | 365 |
-| object stream | 54,530 | 100,340 | 176 | 541 |
-| RC4-encrypted | 85,727 | unsupported | 315 | unsupported |
+| simple | 63,184 | 62,960 | 162 | 368 |
+| Form XObject | 67,560 | incorrect text | 207 | incorrect text |
+| Flate content | 108,624 | 107,888 | 180 | 386 |
+| xref stream | 64,088 | 62,880 | 166 | 365 |
+| object stream | 64,584 | 100,336 | 185 | 541 |
+| RC4-encrypted | 95,808 | unsupported | 324 | unsupported |
 
 To reproduce the support matrix and performance measurements:
 

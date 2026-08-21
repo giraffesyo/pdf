@@ -2,6 +2,7 @@ package pdf
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/giraffesyo/pdf/internal/encoding"
 	"github.com/giraffesyo/pdf/internal/object"
@@ -9,42 +10,88 @@ import (
 
 // fontInfo wraps one font dictionary with decode and width lookups.
 type fontInfo struct {
-	twoByte  bool               // Type0 composite font: 2-byte codes
-	toUni    map[uint32]string  // ToUnicode CMap, checked first
-	fallback *encoding.Encoding // simple-font encoding (WinAnsi/MacRoman/Differences/...)
+	composite     bool
+	toUni         *cmapData
+	encoding      *cmapData
+	fallback      *encoding.Encoding // simple-font encoding (WinAnsi/MacRoman/Differences/...)
+	fallbackFirst bool               // explicit/standard PDF encoding precedes font-program hints
+	differences   map[byte]string    // explicit /Differences always override font-program hints
+	embedded      map[uint32]string
+	warnings      []error
 
 	firstChar int
 	widths    []float64          // simple fonts: indexed by code-firstChar
 	cidWidths map[uint32]float64 // composite fonts
 	defWidth  float64
+
+	vertical    bool
+	cidVertical map[uint32]verticalMetric
+	defVertical verticalMetric
 }
 
-func loadFont(cache map[string]*fontInfo, resources object.Value, name string) *fontInfo {
+type verticalMetric struct {
+	w1 float64
+	vx float64
+	vy float64
+}
+
+func loadFont(
+	cache map[string]*fontInfo,
+	resources object.Value,
+	name string,
+	resolver CMapResolver,
+	streamLimit int,
+) *fontInfo {
 	if f, ok := cache[name]; ok {
 		return f
 	}
 	fv := resources.Key("Font").Key(name)
 	var f *fontInfo
 	if fv.Kind() == object.Dict {
-		f = newFontInfo(fv)
+		f = newFontInfo(fv, resolver, streamLimit)
 	}
 	cache[name] = f
 	return f
 }
 
-func newFontInfo(fv object.Value) *fontInfo {
-	f := &fontInfo{defWidth: 500}
-	f.toUni = parseToUnicode(fv.Key("ToUnicode"))
+func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontInfo {
+	f := &fontInfo{defWidth: 500, defVertical: verticalMetric{w1: -1000, vy: 880}}
+	var err error
+	f.toUni, err = parseToUnicode(fv.Key("ToUnicode"), resolver, streamLimit)
+	if err != nil {
+		f.warnings = append(f.warnings, err)
+	}
 
 	if fv.Key("Subtype").Name() == "Type0" {
-		f.twoByte = true
+		f.composite = true
 		f.defWidth = 1000
+		f.encoding, err = parseEncodingCMap(fv.Key("Encoding"), resolver, streamLimit)
+		if err != nil {
+			f.warnings = append(f.warnings, err)
+		}
+		if f.encoding == nil {
+			if f.toUni != nil && len(f.toUni.spaces) > 0 {
+				f.encoding = &cmapData{
+					spaces:   append([]codeSpace(nil), f.toUni.spaces...),
+					identity: true,
+				}
+			} else {
+				f.encoding = identityCMap(false)
+			}
+		}
+		f.vertical = f.encoding.wmode == 1
 		desc := fv.Key("DescendantFonts").Index(0)
 		if desc.Kind() == object.Dict {
 			if dw, ok := desc.Key("DW").Float64(); ok {
 				f.defWidth = dw
 			}
 			f.cidWidths = parseCIDWidths(desc.Key("W"))
+			f.defVertical = parseDefaultVertical(desc.Key("DW2"))
+			f.cidVertical = parseCIDVertical(desc.Key("W2"))
+			f.embedded, err = embeddedCompositeFallback(desc, streamLimit)
+			if err != nil {
+				f.warnings = append(f.warnings, err)
+			}
 		}
 		return f
 	}
@@ -57,7 +104,12 @@ func newFontInfo(fv object.Value) *fontInfo {
 	if fv.Key("Subtype").Name() == "Type3" && f.toUni == nil {
 		return f
 	}
-	f.fallback = fallbackEncoding(fv)
+	f.differences = parseDifferences(fv.Key("Encoding").Key("Differences"))
+	f.fallback, f.fallbackFirst = fallbackEncoding(fv, f.differences)
+	f.embedded, err = embeddedSimpleFallback(fv, streamLimit)
+	if err != nil {
+		f.warnings = append(f.warnings, err)
+	}
 	f.firstChar = int(intOr(fv.Key("FirstChar"), 0))
 	if wArr := fv.Key("Widths"); wArr.Kind() == object.Array {
 		f.widths = make([]float64, wArr.Len())
@@ -86,27 +138,51 @@ func intOr(v object.Value, d int64) int64 {
 // 3 set, flag 6 clear) keep their built-in encoding, which lives inside
 // the font program; without parsing it only printable ASCII passes
 // through, and high bytes drop honestly.
-func fallbackEncoding(fv object.Value) *encoding.Encoding {
+func fallbackEncoding(fv object.Value, differences map[byte]string) (*encoding.Encoding, bool) {
+	builtIn := builtInFontEncoding(fv.Key("BaseFont").Name())
 	enc := fv.Key("Encoding")
 	if enc.Kind() == object.Dict {
 		base := enc.Key("BaseEncoding").Name()
 		switch base {
-		case "WinAnsiEncoding", "MacRomanEncoding":
+		case "WinAnsiEncoding", "MacRomanEncoding", "SymbolEncoding", "ZapfDingbatsEncoding":
 		default:
-			base = "StandardEncoding"
+			base = builtIn
+			if base == "" {
+				if symbolicFont(fv) {
+					return encoding.New("", differences), false
+				}
+				base = "StandardEncoding"
+			}
 		}
-		return encoding.New(base, parseDifferences(enc.Key("Differences")))
+		return encoding.New(base, differences), true
 	}
 	switch name := enc.Name(); name {
-	case "WinAnsiEncoding", "MacRomanEncoding":
-		return encoding.New(name, nil)
+	case "WinAnsiEncoding", "MacRomanEncoding", "SymbolEncoding", "ZapfDingbatsEncoding":
+		return encoding.New(name, nil), true
 	case "":
-		if symbolicFont(fv) {
-			return encoding.New("", nil) // ASCII passthrough
+		if builtIn != "" {
+			return encoding.New(builtIn, nil), true
 		}
-		return encoding.New("StandardEncoding", nil)
+		if symbolicFont(fv) {
+			return encoding.New("", nil), false // font-program hint first
+		}
+		return encoding.New("StandardEncoding", nil), true
 	default:
-		return encoding.New("", nil) // unrecognized named encoding
+		return encoding.New("", nil), false // unrecognized named encoding
+	}
+}
+
+func builtInFontEncoding(name string) string {
+	if plus := strings.IndexByte(name, '+'); plus >= 0 {
+		name = name[plus+1:]
+	}
+	switch name {
+	case "Symbol":
+		return "SymbolEncoding"
+	case "ZapfDingbats":
+		return "ZapfDingbatsEncoding"
+	default:
+		return ""
 	}
 }
 
@@ -194,9 +270,11 @@ func clampCID(v int64) uint32 {
 }
 
 type decoded struct {
-	text  string
-	width float64 // glyph-space units (1/1000 em)
-	space bool    // single-byte code 32: word spacing applies
+	text     string
+	width    float64 // glyph-space units (1/1000 em)
+	space    bool    // single-byte code 32: word spacing applies
+	vertical bool
+	vm       verticalMetric
 }
 
 // appendDecoded splits raw string bytes into per-code decoded glyphs and
@@ -206,25 +284,32 @@ func (f *fontInfo) appendDecoded(dst []decoded, raw []byte) []decoded {
 		return dst
 	}
 	n := len(raw)
-	if f.twoByte {
-		n /= 2
-	}
 	dst = slices.Grow(dst, n)
 
-	if f.twoByte {
-		for i := 0; i+1 < len(raw); i += 2 {
-			code := uint32(raw[i])<<8 | uint32(raw[i+1])
+	if f.composite {
+		for len(raw) > 0 {
+			key, consumed := f.encoding.nextCode(raw)
+			if consumed == 0 {
+				break
+			}
+			cid := f.encoding.cid(key)
+			width := f.cidWidth(cid)
+			vm := f.verticalMetric(cid, width)
 			dst = append(dst, decoded{
-				text:  f.mapCode(code),
-				width: f.cidWidth(code),
+				text:     f.mapComposite(key, cid),
+				width:    width,
+				space:    key.bytes == 1 && key.value == 32,
+				vertical: f.vertical,
+				vm:       vm,
 			})
+			raw = raw[consumed:]
 		}
 		return dst
 	}
 	for i := range raw {
 		code := uint32(raw[i])
 		dst = append(dst, decoded{
-			text:  f.mapCode(code),
+			text:  f.mapSimple(code),
 			width: f.simpleWidth(int(code)),
 			space: raw[i] == ' ',
 		})
@@ -232,17 +317,107 @@ func (f *fontInfo) appendDecoded(dst []decoded, raw []byte) []decoded {
 	return dst
 }
 
-// mapCode decodes one character code: ToUnicode wins, then the simple-font
-// encoding fallback (single-byte codes only — Type0 fonts never set one),
-// then U+FFFD (stripped later).
-func (f *fontInfo) mapCode(code uint32) string {
-	if s, ok := f.toUni[code]; ok {
+// mapSimple decodes a simple-font code using ToUnicode first, then the font
+// encoding fallback.
+func (f *fontInfo) mapSimple(code uint32) string {
+	if f.toUni != nil {
+		if s, ok := f.toUni.unicode[codeKey{value: code, bytes: 1}]; ok {
+			return s
+		}
+	}
+	if code <= 0xff {
+		if s, explicitlyMapped := f.differences[byte(code)]; explicitlyMapped {
+			return s
+		}
+	}
+	if f.fallbackFirst && f.fallback != nil && code <= 0xff {
+		if s := f.fallback.Decode(byte(code)); s != "" {
+			return s
+		}
+	}
+	if s := f.embedded[code]; sanitizeText(s, false) != "" {
 		return s
 	}
 	if f.fallback != nil && code <= 0xFF {
 		return f.fallback.Decode(byte(code))
 	}
 	return "�"
+}
+
+func (f *fontInfo) mapComposite(key codeKey, cid uint32) string {
+	if f.toUni != nil {
+		if s, ok := f.toUni.unicode[key]; ok {
+			return s
+		}
+	}
+	if s := f.embedded[cid]; s != "" {
+		return s
+	}
+	return "�"
+}
+
+func (f *fontInfo) verticalMetric(cid uint32, width float64) verticalMetric {
+	vm, ok := f.cidVertical[cid]
+	if !ok {
+		vm = f.defVertical
+	}
+	if vm.vx == 0 {
+		vm.vx = width / 2
+	}
+	return vm
+}
+
+func parseDefaultVertical(v object.Value) verticalMetric {
+	vm := verticalMetric{w1: -1000, vy: 880}
+	if v.Kind() == object.Array {
+		if v.Len() > 0 {
+			vm.vy, _ = v.Index(0).Float64()
+		}
+		if v.Len() > 1 {
+			vm.w1, _ = v.Index(1).Float64()
+		}
+	}
+	return vm
+}
+
+// parseCIDVertical reads a CIDFont /W2 array. Array runs contain triples
+// (w1y, v1x, v1y); range runs repeat one triple.
+func parseCIDVertical(v object.Value) map[uint32]verticalMetric {
+	if v.Kind() != object.Array {
+		return nil
+	}
+	out := map[uint32]verticalMetric{}
+	for i := 0; i < v.Len(); {
+		start := clampCID(intOr(v.Index(i), 0))
+		if i+1 >= v.Len() {
+			break
+		}
+		next := v.Index(i + 1)
+		if next.Kind() == object.Array {
+			for j, cid := 0, start; j+2 < next.Len() && cid <= 0xffff; j, cid = j+3, cid+1 {
+				w1, _ := next.Index(j).Float64()
+				vx, _ := next.Index(j + 1).Float64()
+				vy, _ := next.Index(j + 2).Float64()
+				out[cid] = verticalMetric{w1: w1, vx: vx, vy: vy}
+			}
+			i += 2
+			continue
+		}
+		if i+4 >= v.Len() {
+			break
+		}
+		end := clampCID(intOr(next, 0))
+		w1, _ := v.Index(i + 2).Float64()
+		vx, _ := v.Index(i + 3).Float64()
+		vy, _ := v.Index(i + 4).Float64()
+		if end >= start && end-start < 65536 {
+			for cid := start; cid <= end; cid++ {
+				out[cid] = verticalMetric{w1: w1, vx: vx, vy: vy}
+			}
+		}
+		i += 5
+	}
+	return out
 }
 
 func (f *fontInfo) simpleWidth(code int) float64 {

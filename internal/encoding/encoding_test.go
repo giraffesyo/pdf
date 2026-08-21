@@ -93,3 +93,20 @@ func TestDecodeDifferences(t *testing.T) {
 		}
 	}
 }
+
+func TestBase14SymbolEncodings(t *testing.T) {
+	symbol := New("SymbolEncoding", nil)
+	if got := symbol.Decode('A'); got != "Α" {
+		t.Fatalf("Symbol A = %q", got)
+	}
+	if got := symbol.Decode(0xf2); got != "∫" {
+		t.Fatalf("Symbol integral = %q", got)
+	}
+	dingbats := New("ZapfDingbatsEncoding", nil)
+	if got := dingbats.Decode(0x21); got != "✁" {
+		t.Fatalf("Zapf 0x21 = %q", got)
+	}
+	if got := dingbats.Decode(0xfe); got != "➾" {
+		t.Fatalf("Zapf 0xfe = %q", got)
+	}
+}
