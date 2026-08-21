@@ -275,3 +275,44 @@ func must(r io.Reader, err error) io.Reader {
 	}
 	return r
 }
+
+// TestFlateReleaseReturnsToPool: a released FlateDecode reader hands its
+// decompressor back, refuses further reads, and tolerates a second
+// Release; the next stream decodes correctly on the recycled state.
+func TestFlateReleaseReturnsToPool(t *testing.T) {
+	for i := range 3 {
+		orig := bytes.Repeat([]byte{byte('a' + i)}, 70000) // wider than one window
+		var b bytes.Buffer
+		compress(t, zlib.NewWriter(&b), orig)
+		r := must(Apply(bytes.NewReader(b.Bytes()), "FlateDecode", Params{}))
+		got, err := io.ReadAll(r)
+		if err != nil || !bytes.Equal(got, orig) {
+			t.Fatalf("round %d: got %d bytes, err %v", i, len(got), err)
+		}
+		rel, ok := r.(Releaser)
+		if !ok {
+			t.Fatalf("FlateDecode reader is %T, want Releaser", r)
+		}
+		rel.Release()
+		rel.Release()
+		if _, err := r.Read(make([]byte, 1)); err == nil {
+			t.Fatal("read after Release succeeded")
+		}
+	}
+}
+
+func TestFlatePredictorForwardsRelease(t *testing.T) {
+	var b bytes.Buffer
+	compress(t, zlib.NewWriter(&b), []byte{2, 1, 1, 1})
+	r := must(Apply(bytes.NewReader(b.Bytes()), "FlateDecode", Params{Predictor: 12, Columns: 3}))
+	if _, ok := r.(Releaser); !ok {
+		t.Fatalf("predictor-wrapped reader is %T, want Releaser", r)
+	}
+	if _, err := io.ReadAll(r); err != nil {
+		t.Fatal(err)
+	}
+	r.(Releaser).Release()
+	if _, err := r.Read(make([]byte, 1)); err == nil {
+		t.Fatal("read after Release succeeded")
+	}
+}

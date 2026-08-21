@@ -338,11 +338,29 @@ func (r *Reader) streamReader(s *stream) (io.ReadCloser, error) {
 		body = r.dec.DecryptStream(s.owner.num, s.owner.gen, body)
 	}
 
-	rd, err := r.applyFilters(body, s.d)
+	rd, release, err := r.applyFilters(body, s.d)
 	if err != nil {
 		return nil, err
 	}
-	return io.NopCloser(rd), nil
+	if release == nil {
+		return io.NopCloser(rd), nil
+	}
+	return &releasingReader{Reader: rd, release: release}, nil
+}
+
+// releasingReader returns pooled decoder state on Close. Close is
+// idempotent; reads after it fail.
+type releasingReader struct {
+	io.Reader
+	release func()
+}
+
+func (c *releasingReader) Close() error {
+	if c.release != nil {
+		c.release()
+		c.release = nil
+	}
+	return nil
 }
 
 // streamExempt reports streams that are never encrypted: cross-reference

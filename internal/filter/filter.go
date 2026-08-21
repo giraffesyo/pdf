@@ -10,8 +10,6 @@ package filter
 
 import (
 	"bytes"
-	"compress/flate"
-	"compress/zlib"
 	"encoding/ascii85"
 	"errors"
 	"fmt"
@@ -67,21 +65,6 @@ func Apply(r io.Reader, filterName string, p Params) (io.Reader, error) {
 	default:
 		return nil, fmt.Errorf("unsupported stream filter /%s", filterName)
 	}
-}
-
-// newFlateReader reads zlib data, falling back to raw deflate for the
-// real-world files whose generators omit the zlib header.
-func newFlateReader(r io.Reader) (io.Reader, error) {
-	var head bytes.Buffer
-	zr, err := zlib.NewReader(io.TeeReader(r, &head))
-	if err == nil {
-		return zr, nil
-	}
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, err
-	}
-	// Header error: retry the already-consumed bytes as raw deflate.
-	return flate.NewReader(io.MultiReader(bytes.NewReader(head.Bytes()), r)), nil
 }
 
 // asciiHexReader decodes ASCIIHexDecode: hex pairs, whitespace ignored,
