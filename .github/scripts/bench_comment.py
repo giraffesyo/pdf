@@ -39,17 +39,22 @@ def read_blocks(path):
     return blocks
 
 
+def sig3(value):
+    """Three significant digits, without a trailing decimal point."""
+    return f"{value:#.3g}".rstrip(".")
+
+
 def fmt_time(seconds):
     for scale, unit in ((1.0, "s"), (1e-3, "ms"), (1e-6, "µs"), (1e-9, "ns")):
         if seconds >= scale:
-            return f"{seconds / scale:#.3g} {unit}"
-    return f"{seconds * 1e9:.3g} ns"
+            return f"{sig3(seconds / scale)} {unit}"
+    return f"{sig3(seconds * 1e9)} ns"
 
 
 def fmt_bytes(n):
     for scale, unit in ((1 << 30, "GB"), (1 << 20, "MB"), (1 << 10, "KB")):
         if n >= scale:
-            return f"{n / scale:#.3g} {unit}"
+            return f"{sig3(n / scale)} {unit}"
     return f"{n:.0f} B"
 
 
