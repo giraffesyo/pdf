@@ -3,10 +3,11 @@
 
 Usage: bench_comment.py <benchstat-csv> <raw-benchstat-text>
 
-The CSV comes from `benchstat -format csv base.txt head.txt`: one block
-per metric, each with a header row naming the metric and one row per
-benchmark, ending in a geomean row. Environment variables supply the
-links that make a rewritten comment obviously current.
+The CSV comes from `benchstat -format csv base=... head=...`. It opens
+with the configuration the benchmarks ran under and then repeats, once
+per package, a block per metric: a header row naming the metric, a row
+per benchmark, and a geomean. Environment variables supply the links and
+timestamp that make a rewritten comment obviously current.
 """
 
 import csv
@@ -14,29 +15,38 @@ import os
 import sys
 
 MARKER = "<!-- benchmark-comparison -->"
-SIGNIFICANT = 10.0  # percent; below this hosted runners are too noisy to call
+SIGNIFICANT = 10.0  # percent; below this a shared runner cannot tell the difference
+CONFIG_KEYS = ("goos", "goarch", "pkg", "cpu")
+METRIC_ORDER = ("sec/op", "B/op", "allocs/op")
 
 
-def read_blocks(path):
-    """Split the CSV into (metric, rows) blocks, one per measurement."""
+def read_groups(path):
+    """Return (config, groups): one group per package, each metric's rows."""
     with open(path, newline="") as f:
         rows = list(csv.reader(f))
-    blocks, metric, body = [], None, []
+    config, groups, current = {}, [], None
     for row in rows:
         if not any(cell.strip() for cell in row):
-            if metric:
-                blocks.append((metric, body))
-            metric, body = None, []
             continue
-        if row and row[0] == "" and len(row) > 1:
-            if row[1].endswith("/op"):  # header naming the metric
-                metric, body = row[1], []
-            continue  # the other all-empty-first-cell row names the files
-        if metric:
-            body.append(row)
-    if metric:
-        blocks.append((metric, body))
-    return blocks
+        first = row[0]
+        key = first.split(":", 1)[0].strip()
+        if key in CONFIG_KEYS and ":" in first:
+            value = first.split(":", 1)[1].strip()
+            config.setdefault(key, value)
+            if key == "pkg":
+                current = {"pkg": value, "metrics": []}
+                groups.append(current)
+            continue
+        if first == "" and len(row) > 1:
+            if row[1].endswith("/op"):  # header naming this block's metric
+                if current is None:
+                    current = {"pkg": "", "metrics": []}
+                    groups.append(current)
+                current["metrics"].append((row[1], []))
+            continue  # the other leading-empty row names the two inputs
+        if current and current["metrics"]:
+            current["metrics"][-1][1].append(row)
+    return config, groups
 
 
 def sig3(value):
@@ -58,11 +68,7 @@ def fmt_bytes(n):
     return f"{n:.0f} B"
 
 
-def fmt_count(n):
-    return f"{n:,.0f}"
-
-
-FORMATTERS = {"sec/op": fmt_time, "B/op": fmt_bytes, "allocs/op": fmt_count}
+FORMATTERS = {"sec/op": fmt_time, "B/op": fmt_bytes, "allocs/op": lambda n: f"{n:,.0f}"}
 
 
 def parse_delta(text):
@@ -80,10 +86,10 @@ def decorate(display, percent, metric):
     """Mark differences big enough to be worth a reader's attention."""
     if abs(percent) < SIGNIFICANT:
         return display
-    arrow = "🟢" if percent < 0 else "🔴"
-    if metric != "sec/op" and percent > 0:
-        arrow = "🟡"  # more memory is a trade-off, not a failure
-    return f"{arrow} **{display}**"
+    if percent < 0:
+        return f"🟢 **{display}**"
+    # More memory is a trade-off worth seeing, not a failure like slower is.
+    return f"{'🔴' if metric == 'sec/op' else '🟡'} **{display}**"
 
 
 def strip_suffix(name):
@@ -92,10 +98,10 @@ def strip_suffix(name):
     return head if sep and tail.isdigit() else name
 
 
-def collect(blocks):
-    """Merge the per-metric blocks into one row per benchmark, in order."""
+def collect(group):
+    """Merge a package's per-metric blocks into one row per benchmark."""
     names, data = [], {}
-    for metric, rows in blocks:
+    for metric, rows in group["metrics"]:
         for row in rows:
             if len(row) < 6:
                 continue
@@ -108,56 +114,60 @@ def collect(blocks):
             except ValueError:
                 continue
             data[name][metric] = (base, head, *parse_delta(row[5]))
-    return names, data
+    metrics = [m for m in METRIC_ORDER if any(m in data[n] for n in names)]
+    return names, data, metrics
+
+
+def render_table(group, show_heading):
+    names, data, metrics = collect(group)
+    if not names:
+        return []
+    out = []
+    if show_heading:
+        out += [f"**{group['pkg']}**", ""]
+    out.append("| Benchmark | " + " | ".join(f"{m} before | after | Δ" for m in metrics) + " |")
+    out.append("|:--|" + "".join("--:|--:|--:|" for _ in metrics))
+    for name in names:
+        cells = [f"**{name}**" if name == "geomean" else f"`{name}`"]
+        for metric in metrics:
+            entry = data[name].get(metric)
+            if not entry:
+                cells += ["", "", ""]
+                continue
+            base, head, display, percent = entry
+            fmt = FORMATTERS.get(metric, str)
+            cells += [fmt(base), fmt(head), decorate(display, percent, metric)]
+        out.append("| " + " | ".join(cells) + " |")
+    out.append("")
+    return out
 
 
 def main():
     csv_path, raw_path = sys.argv[1], sys.argv[2]
-    names, data = collect(read_blocks(csv_path))
-    metrics = [m for m in ("sec/op", "B/op", "allocs/op") if any(m in data[n] for n in names)]
-
+    config, groups = read_groups(csv_path)
     base_ref = os.environ.get("BASE_REF", "the base branch")
-    out = [
-        MARKER,
-        f"### Benchmarks vs `{base_ref}`",
-        "",
-    ]
-    if not names:
-        out += ["_No benchmark results were produced._", ""]
-    else:
-        header = "| Benchmark | " + " | ".join(
-            f"{m} before | after | Δ" for m in metrics
-        ) + " |"
-        align = "|:--|" + "".join("--:|--:|--:|" for _ in metrics)
-        out += [header, align]
-        for name in names:
-            label = f"**{name}**" if name == "geomean" else f"`{name}`"
-            cells = [label]
-            for metric in metrics:
-                entry = data[name].get(metric)
-                if not entry:
-                    cells += ["", "", ""]
-                    continue
-                base, head, display, percent = entry
-                fmt = FORMATTERS.get(metric, str)
-                cells += [fmt(base), fmt(head), decorate(display, percent, metric)]
-            out.append("| " + " | ".join(cells) + " |")
-        out.append("")
 
-    commit = os.environ.get("HEAD_SHA", "")[:7]
-    run_url = os.environ.get("RUN_URL", "")
-    stamp = os.environ.get("STAMP", "")
-    provenance = "Measured on this run's runner, one run per side"
-    if commit:
-        provenance += f", commit `{commit}`"
-    if run_url:
-        provenance += f" ([run]({run_url}))"
-    if stamp:
-        provenance += f", updated {stamp}"
-    out += [
-        f"_{provenance}. Differences under {SIGNIFICANT:.0f}% are within the noise "
-        "of a shared runner and are shown as `~`. This comment is rewritten in "
-        "place on every push, so it always reflects the latest commit._",
+    body = [MARKER, f"### Benchmarks vs `{base_ref}`", ""]
+    tables = [render_table(g, show_heading=len(groups) > 1) for g in groups]
+    tables = [t for t in tables if t]
+    if not tables:
+        body += ["_No benchmark results were produced._", ""]
+    for table in tables:
+        body += table
+
+    provenance = ["one run per side"]
+    if config.get("cpu"):
+        provenance.append(f"on {config['cpu']}")
+    if commit := os.environ.get("HEAD_SHA", "")[:7]:
+        provenance.append(f"commit `{commit}`")
+    if run_url := os.environ.get("RUN_URL", ""):
+        provenance.append(f"[run]({run_url})")
+    if stamp := os.environ.get("STAMP", ""):
+        provenance.append(f"updated {stamp}")
+    body += [
+        f"_Measured {', '.join(provenance)}. Differences under {SIGNIFICANT:.0f}% are "
+        "within a shared runner's noise and read as `~`. This comment is rewritten in "
+        "place on every push — check the timestamp, not its position in the timeline._",
         "",
         "<details><summary>Raw benchstat output</summary>",
         "",
@@ -167,7 +177,7 @@ def main():
         "",
         "</details>",
     ]
-    sys.stdout.write("\n".join(out) + "\n")
+    sys.stdout.write("\n".join(body) + "\n")
 
 
 if __name__ == "__main__":
