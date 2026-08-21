@@ -135,11 +135,10 @@ jobs:
           fail-on-alert: true
           summary-always: true
           skip-fetch-gh-pages: true
-      # The gate above only fails the build; this reports what changed.
-      # (Its own comment options leave a commit comment, which a pull
-      # request does not show.) benchstat compares the two runs already
-      # measured, and the comment is rewritten in place on each push.
-      # Skipped for forks, whose token cannot write comments.
+      # The gate above only fails the build; this reports what changed, as
+      # a table rather than the action's own commit comment (which a pull
+      # request does not show). benchstat compares the two runs already
+      # measured. Skipped for forks, whose token cannot write comments.
       - name: comment benchmark comparison
         if: >-
           github.event_name == 'pull_request' &&
@@ -147,19 +146,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           go install golang.org/x/perf/cmd/benchstat@latest
+          benchstat="$(go env GOPATH)/bin/benchstat"
+          "$benchstat" -format csv base=base-bench.txt head=head-bench.txt > comparison.csv
+          "$benchstat" base=base-bench.txt head=head-bench.txt > comparison.txt
+          STAMP="$(date -u '+%Y-%m-%d %H:%M UTC')" \
+            python3 .github/scripts/bench_comment.py comparison.csv comparison.txt > comparison.md
           marker='<!-- benchmark-comparison -->'
-          {
-            echo "$marker"
-            echo "### Benchmarks vs \`${{ github.base_ref }}\`"
-            echo
-            echo '```'
-            "$(go env GOPATH)/bin/benchstat" base-bench.txt head-bench.txt
-            echo '```'
-            echo
-            echo "_One run each; treat differences under about 10% as noise._"
-          } > comparison.md
+          # Rewrite this job's own comment rather than adding one per run.
+          # GitHub keeps an edited comment where it was first posted, so
+          # the body carries the commit and time it last ran.
           id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
             --jq "[.[] | select(.body | startswith(\"$marker\")) | .id] | first // empty")
           if [ -n "$id" ]; then
