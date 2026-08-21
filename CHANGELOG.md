@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/giraffesyo/pdf/compare/v0.5.0...v0.6.0) (2026-08-21)
+
+
+### Features
+
+* report a page's image count, and take a predicate for OCR selection ([#33](https://github.com/giraffesyo/pdf/issues/33)) ([7a48b44](https://github.com/giraffesyo/pdf/commit/7a48b444fbf33c870e236da759d1722ef646bbe2))
+
 ## [0.5.0](https://github.com/giraffesyo/pdf/compare/v0.4.0...v0.5.0) (2026-08-21)
 
 
