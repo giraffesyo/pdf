@@ -286,11 +286,14 @@ func (r *Reader) rebuildXref() error {
 	r.xref = r.xref[:0]
 	r.cache = map[int]any{}
 
-	for _, m := range objHeaderRE(data) {
-		r.growXref(m.num + 1)
-		if m.num < len(r.xref) {
-			r.xref[m.num] = xrefEntry{kind: 1, offset: m.off, gen: m.gen}
+	headers := objHeaderRE(data)
+	bound := rebuildObjectBound(len(headers))
+	for _, m := range headers {
+		if m.num >= bound {
+			continue
 		}
+		r.growXref(m.num + 1)
+		r.xref[m.num] = xrefEntry{kind: 1, offset: m.off, gen: m.gen}
 	}
 	// Prefer a real trailer; otherwise synthesize one from a located
 	// /Catalog so page navigation still works.
@@ -302,6 +305,20 @@ func (r *Reader) rebuildXref() error {
 		return errors.New("pdf: no cross-reference data and no catalog found")
 	}
 	return nil
+}
+
+// rebuildObjectBound is the highest object number (exclusive) a rebuild
+// trusts from a file holding n object headers. Object numbers of a real
+// file track how many objects it has, with room for the gaps incremental
+// updates leave; a header claiming a number far beyond that is damage
+// or hostility, and admitting it would size the table — forty bytes an
+// entry, up to maxObjects entries — for an object that does not exist.
+func rebuildObjectBound(n int) int {
+	const (
+		minBound = 4096 // small files may still number sparsely
+		slack    = 64   // entries per header present
+	)
+	return min(maxObjects, max(minBound, slack*n))
 }
 
 type objHeader struct {
@@ -377,6 +394,9 @@ func (r *Reader) lastTrailer(data []byte) dict {
 // objects (used only when no trailer is available).
 func (r *Reader) findCatalog() int {
 	for num := 1; num < len(r.xref); num++ {
+		if r.xref[num].kind == 0 {
+			continue // nothing to parse; object() would only allocate an error
+		}
 		obj, err := r.object(num, r.xref[num].gen)
 		if err != nil {
 			continue

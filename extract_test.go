@@ -293,6 +293,9 @@ func FuzzExtract(f *testing.F) {
 	seed := "BT /F1 12 Tf 72 720 Td (seed text) Tj ET"
 	f.Add(simpleDoc(seed))
 	f.Add([]byte("%PDF-1.4 garbage"))
+	// A damaged header claiming an absurd object number once sized the
+	// rebuilt xref table for it (160 MB, ~1 s); see rebuildObjectBound.
+	f.Add([]byte("  0444444440000000  0000000000000000000000 obj 000000000\x18\x1800000"))
 	f.Add(pdftest.BuildXrefStream(1,
 		pdftest.Catalog(2), pdftest.Pages(3),
 		pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
