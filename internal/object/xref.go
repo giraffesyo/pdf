@@ -261,8 +261,10 @@ func (r *Reader) growXref(n int) {
 	if n > maxObjects {
 		n = maxObjects
 	}
-	for len(r.xref) < n {
-		r.xref = append(r.xref, xrefEntry{})
+	if n > len(r.xref) {
+		// One allocation per subsection: appending entry by entry from the
+		// initial 1024 reallocated the table many times for large files.
+		r.xref = append(r.xref, make([]xrefEntry, n-len(r.xref))...)
 	}
 }
 
