@@ -27,6 +27,12 @@ type fontInfo struct {
 	loadEmbedded func() (map[uint32]string, error)
 	embeddedErr  error
 
+	// Simple fonts have at most 256 codes; each code's text is resolved
+	// once and then served from here instead of through the ToUnicode,
+	// Differences, and encoding lookups on every glyph.
+	simpleText  [256]string
+	simpleKnown [4]uint64 // bitmap over simpleText
+
 	firstChar int
 	widths    []float64          // simple fonts: indexed by code-firstChar
 	cidWidths map[uint32]float64 // composite fonts
@@ -346,6 +352,17 @@ func (f *fontInfo) appendDecoded(dst []decoded, raw []byte) []decoded {
 // mapSimple decodes a simple-font code using ToUnicode first, then the font
 // encoding fallback.
 func (f *fontInfo) mapSimple(code uint32) string {
+	if code > 0xff {
+		return f.resolveSimple(code)
+	}
+	if f.simpleKnown[code>>6]&(1<<(code&63)) == 0 {
+		f.simpleText[code] = f.resolveSimple(code)
+		f.simpleKnown[code>>6] |= 1 << (code & 63)
+	}
+	return f.simpleText[code]
+}
+
+func (f *fontInfo) resolveSimple(code uint32) string {
 	if f.toUni != nil {
 		if s, ok := f.toUni.unicode[codeKey{value: code, bytes: 1}]; ok {
 			return s
