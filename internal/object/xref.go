@@ -13,7 +13,7 @@ import (
 // and hybrid /XRefStm chains. On any failure it falls back to rebuilding
 // the table by scanning the whole file.
 func (r *Reader) readXref() error {
-	r.xref = make([]xrefEntry, 0, 1024)
+	r.xref = nil // growXref sizes it from the first subsection
 	start, err := r.startxref()
 	if err == nil {
 		if err = r.readXrefSection(start, map[int64]bool{}); err == nil && r.trailer != nil {

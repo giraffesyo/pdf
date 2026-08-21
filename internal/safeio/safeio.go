@@ -33,17 +33,30 @@ func ReadAllGuardedLimit(r io.Reader, limit int) []byte {
 // reading stopped because of a source error, the size cap, or a stalled
 // reader. Bytes successfully read before the error are retained.
 func ReadAllGuardedLimitError(r io.Reader, limit int) ([]byte, error) {
-	if limit <= 0 {
-		return nil, nil
-	}
+	return AppendAllGuardedLimitError(nil, r, limit)
+}
 
-	// Read directly into the result and grow it geometrically. A separate
-	// fixed-size scratch buffer made even tiny streams cost 64 KiB, then
-	// copied every byte into a second allocation.
-	out := make([]byte, 0, min(512, limit))
+// AppendAllGuardedLimitError is ReadAllGuardedLimitError appending to buf
+// and filling its spare capacity before allocating, so a caller decoding
+// one stream after another — the pages of a document — can pass the
+// previous result's buf[:0] and stop regrowing. limit bounds the bytes
+// appended, not len(buf).
+func AppendAllGuardedLimitError(buf []byte, r io.Reader, limit int) ([]byte, error) {
+	if limit <= 0 {
+		return buf, nil
+	}
+	base := len(buf)
+	out := buf
+	if cap(out) == base {
+		// Read directly into the result and grow it geometrically. A
+		// separate fixed-size scratch buffer made even tiny streams cost
+		// 64 KiB, then copied every byte into a second allocation.
+		out = make([]byte, base, base+min(512, limit))
+		copy(out, buf)
+	}
 	var probe []byte
 	zeros := 0
-	for len(out) < limit {
+	for len(out)-base < limit {
 		var n int
 		var err error
 		if len(out) == cap(out) {
@@ -54,14 +67,14 @@ func ReadAllGuardedLimitError(r io.Reader, limit int) ([]byte, error) {
 			}
 			n, err = r.Read(probe)
 			if n > 0 {
-				capacity := min(max(2*cap(out), 4<<10), limit)
-				grown := make([]byte, len(out), capacity)
+				capacity := min(max(2*(cap(out)-base), 4<<10), limit)
+				grown := make([]byte, len(out), base+capacity)
 				copy(grown, out)
 				out = grown
 				out = append(out, probe[:n]...)
 			}
 		} else {
-			n, err = r.Read(out[len(out):cap(out)])
+			n, err = r.Read(out[len(out):min(cap(out), base+limit)])
 			out = out[:len(out)+n]
 		}
 		if err != nil {

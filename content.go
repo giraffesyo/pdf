@@ -49,15 +49,21 @@ const (
 // otherwise loop io.ReadAll forever). It returns any decoded prefix together
 // with a non-nil error when decoding fails or the limit is exceeded.
 func readStreamBoundedLimitError(v object.Value, limit int) ([]byte, error) {
+	return appendStreamBoundedLimitError(nil, v, limit)
+}
+
+// appendStreamBoundedLimitError is readStreamBoundedLimitError appending
+// to buf, reusing its capacity.
+func appendStreamBoundedLimitError(buf []byte, v object.Value, limit int) ([]byte, error) {
 	if v.Kind() != object.Stream {
-		return nil, errors.New("content value is not a stream")
+		return buf, errors.New("content value is not a stream")
 	}
 	rc, err := v.Reader()
 	if err != nil {
-		return nil, err
+		return buf, err
 	}
 	defer func() { _ = rc.Close() }() // read-only handle
-	return safeio.ReadAllGuardedLimitError(rc, limit)
+	return safeio.AppendAllGuardedLimitError(buf, rc, limit)
 }
 
 // contentBytes returns the page's full content: /Contents may be a single
@@ -68,18 +74,24 @@ func contentBytesLimit(contents object.Value, limit int) []byte {
 }
 
 func contentBytesLimitError(contents object.Value, limit int) ([]byte, []error) {
+	return contentBytesLimitErrorInto(nil, contents, limit)
+}
+
+// contentBytesLimitErrorInto is contentBytesLimitError decoding into buf's
+// capacity (from its start), for a caller that walks page after page.
+func contentBytesLimitErrorInto(buf []byte, contents object.Value, limit int) ([]byte, []error) {
 	if limit <= 0 {
 		return nil, nil
 	}
+	data := buf[:0]
 	if contents.Kind() == object.Array {
-		var data []byte
 		var errs []error
 		processed := 0
 		for i := 0; i < contents.Len() && len(data) < limit; i++ {
 			processed = i + 1
 			remaining := limit - len(data)
-			part, err := readStreamBoundedLimitError(contents.Index(i), remaining)
-			data = append(data, part...)
+			var err error
+			data, err = appendStreamBoundedLimitError(data, contents.Index(i), remaining)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("content stream %d: %w", i+1, err))
 			}
@@ -92,7 +104,7 @@ func contentBytesLimitError(contents object.Value, limit int) ([]byte, []error) 
 		}
 		return data, errs
 	}
-	data, err := readStreamBoundedLimitError(contents, limit)
+	data, err := appendStreamBoundedLimitError(data, contents, limit)
 	if err != nil {
 		return data, []error{err}
 	}
@@ -148,7 +160,20 @@ func interpretContent(data []byte, do func(op []byte, args []operand)) {
 }
 
 func interpretContentError(data []byte, do func(op []byte, args []operand) error) error {
+	return interpretContentPooled(data, nil, do)
+}
+
+// interpretContentPooled is interpretContentError drawing array operand
+// buffers from *pool and leaving them there afterwards, so a caller that
+// interprets many streams keeps one pool rather than warming a new one
+// per stream. The pool may only be shared by lexers that do not run at
+// the same time.
+func interpretContentPooled(data []byte, pool *[][]operand, do func(op []byte, args []operand) error) error {
 	lx := &contentLexer{data: data}
+	if pool != nil {
+		lx.arrays = *pool
+		defer func() { *pool = lx.arrays }()
+	}
 	var stack []operand
 	for lx.i < len(lx.data) {
 		lx.skipSpace()

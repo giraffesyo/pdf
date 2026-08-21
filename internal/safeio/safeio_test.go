@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -84,4 +85,28 @@ func stringSize(size int) string {
 		return "128B"
 	}
 	return "64KiB"
+}
+
+func TestAppendAllGuardedReusesCapacity(t *testing.T) {
+	buf := make([]byte, 0, 64)
+	out, err := AppendAllGuardedLimitError(buf[:0], strings.NewReader("hello"), 100)
+	if err != nil || string(out) != "hello" || cap(out) != 64 {
+		t.Fatalf("reuse: %q cap %d err %v", out, cap(out), err)
+	}
+	// Appends after an existing prefix; limit counts appended bytes only.
+	out, err = AppendAllGuardedLimitError([]byte("ab"), strings.NewReader("cdefgh"), 3)
+	if !errors.Is(err, ErrLimitExceeded) || string(out) != "abcde" {
+		t.Fatalf("prefix+limit: %q err %v", out, err)
+	}
+	// A spare capacity larger than the limit must not read past it.
+	big := make([]byte, 0, 1<<12)
+	out, err = AppendAllGuardedLimitError(big, strings.NewReader(strings.Repeat("x", 50)), 10)
+	if !errors.Is(err, ErrLimitExceeded) || len(out) != 10 {
+		t.Fatalf("oversized buffer: len %d err %v", len(out), err)
+	}
+	// Exact fit reports no error.
+	out, err = AppendAllGuardedLimitError(nil, strings.NewReader("12345"), 5)
+	if err != nil || string(out) != "12345" {
+		t.Fatalf("exact: %q err %v", out, err)
+	}
 }
