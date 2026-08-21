@@ -112,6 +112,24 @@ type contentLexer struct {
 	data []byte
 	i    int
 	err  error
+
+	// arrays holds the element buffers of top-level array operands from
+	// operators that have already run, for reuse. TJ arrays are long and
+	// frequent, and growing a fresh slice for each one was the lexer's
+	// main allocation. Only operand-stack arrays are pooled: arrays nested
+	// in a dictionary may outlive the operator (BDC properties), and every
+	// consumer reads a stack array before the operator returns.
+	arrays [][]operand
+}
+
+// recycle returns the array buffers of a completed operator's operands
+// to the pool.
+func (lx *contentLexer) recycle(stack []operand) {
+	for _, op := range stack {
+		if op.kind == opArr && cap(op.arr) > 0 {
+			lx.arrays = append(lx.arrays, op.arr[:0])
+		}
+	}
 }
 
 func (lx *contentLexer) setErr(err error) {
@@ -162,11 +180,13 @@ func interpretContentError(data []byte, do func(op []byte, args []operand) error
 				stack = append(stack, operand{kind: opNull})
 			case "BI":
 				lx.skipInlineImage()
+				lx.recycle(stack)
 				stack = stack[:0]
 			default:
 				if err := do(kw, stack); err != nil {
 					return err
 				}
+				lx.recycle(stack)
 				stack = stack[:0]
 			}
 		}
@@ -392,6 +412,12 @@ func (lx *contentLexer) readHexString() []byte {
 func (lx *contentLexer) readArray(depth int) (operand, bool) {
 	lx.i++ // consume '['
 	arr := operand{kind: opArr}
+	if depth == 0 {
+		if n := len(lx.arrays); n > 0 {
+			arr.arr = lx.arrays[n-1]
+			lx.arrays = lx.arrays[:n-1]
+		}
+	}
 	closed := false
 	for lx.i < len(lx.data) {
 		lx.skipSpace()

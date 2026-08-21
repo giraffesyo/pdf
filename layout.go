@@ -6,8 +6,12 @@ import (
 	"strings"
 )
 
+// layoutGlyph refers to a page glyph by pointer rather than copying it: a
+// Glyph is 160 bytes, and copying every one into per-line slices doubled
+// the allocation volume of text reconstruction. The pointer targets the
+// caller's slice, which is not resized while layout runs.
 type layoutGlyph struct {
-	Glyph
+	*Glyph
 	index int
 }
 
@@ -76,7 +80,7 @@ func buildLayoutLines(glyphs []Glyph) []layoutLine {
 				}
 			}
 		}
-		item := layoutGlyph{Glyph: glyph, index: i}
+		item := layoutGlyph{Glyph: &glyphs[i], index: i}
 		if best < 0 {
 			lines = append(lines, layoutLine{
 				glyphs: []layoutGlyph{item},
@@ -97,8 +101,8 @@ func buildLayoutLines(glyphs []Glyph) []layoutLine {
 	for i := range lines {
 		line := &lines[i]
 		slices.SortStableFunc(line.glyphs, func(a, b layoutGlyph) int {
-			ap := glyphProjection(a.Glyph, line.dir, false)
-			bp := glyphProjection(b.Glyph, line.dir, false)
+			ap := glyphProjection(*a.Glyph, line.dir, false)
+			bp := glyphProjection(*b.Glyph, line.dir, false)
 			switch {
 			case ap < bp:
 				return -1
@@ -137,7 +141,7 @@ func writeLayoutLine(b *strings.Builder, line layoutLine) {
 	endsSpace := false
 	prevEnd := 0.0
 	for i, glyph := range line.glyphs {
-		start := glyphProjection(glyph.Glyph, line.dir, false)
+		start := glyphProjection(*glyph.Glyph, line.dir, false)
 		if i > 0 {
 			gap := start - prevEnd
 			threshold := 0.17 * glyph.Size
@@ -151,7 +155,7 @@ func writeLayoutLine(b *strings.Builder, line layoutLine) {
 		}
 		b.WriteString(glyph.Text)
 		endsSpace = strings.HasSuffix(glyph.Text, " ")
-		prevEnd = glyphProjection(glyph.Glyph, line.dir, true)
+		prevEnd = glyphProjection(*glyph.Glyph, line.dir, true)
 	}
 }
 
@@ -198,8 +202,8 @@ func orderColumns(lines []layoutLine, box Rect) []layoutLine {
 		for i := 1; i < len(line.glyphs); i++ {
 			prev := line.glyphs[i-1]
 			current := line.glyphs[i]
-			gap := glyphProjection(current.Glyph, line.dir, false) -
-				glyphProjection(prev.Glyph, line.dir, true)
+			gap := glyphProjection(*current.Glyph, line.dir, false) -
+				glyphProjection(*prev.Glyph, line.dir, true)
 			size := max(prev.Size, current.Size)
 			threshold := max(4*max(size, 1), 0.04*(box.MaxX-box.MinX))
 			if gap > threshold {
