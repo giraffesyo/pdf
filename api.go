@@ -76,8 +76,8 @@ type Limits struct {
 	MaxGlyphsPerPage    int
 	MaxFormDepth        int
 
-	// MaxImagesPerPage bounds how many image paintings a page records
-	// when images are collected. Default 10,000.
+	// MaxImagesPerPage bounds how many image paintings a page is read
+	// for, whether or not their data is collected. Default 10,000.
 	MaxImagesPerPage int
 	// MaxImageBytesPerPage bounds the image data read for one page, over
 	// all its distinct images, each of which MaxStreamBytes bounds on its
@@ -235,7 +235,7 @@ type FormField struct {
 type CMapResolver func(name string) ([]byte, error)
 
 // OCRRequest is passed to an external OCR implementation for a page the
-// OCRPolicy selects. Page carries whatever the content streams yielded —
+// OCRPolicy, or OCRSelect, selects. Page carries whatever the content streams yielded —
 // its Glyphs, and its Images with their placement and encoded data — so
 // an implementation can OCR the page's images directly, through
 // Image.Decode or by handing the still-encoded Data to an engine that
@@ -323,6 +323,22 @@ type Options struct {
 	// and images in hand.
 	OCR       OCR
 	OCRPolicy OCRPolicy
+
+	// OCRSelect chooses the pages OCR is asked about, and overrides
+	// OCRPolicy where it is set. The three policies are the answers
+	// worth naming, not the only reasonable ones: a form with a typed
+	// header over a scanned body has glyphs, so OCRTextlessPages passes
+	// it by, while OCRImagePages reads every figure in a document that
+	// is mostly typeset. A predicate can say what the document actually
+	// needs — a floor on glyphs per page, a page range, a size the
+	// images have to reach.
+	//
+	// The page it receives is the one the content streams produced:
+	// Glyphs and ImageCount are set, and Images is still empty, because
+	// image data is read only once something asks for it. Like OCR
+	// itself, it is called from the page workers and must be safe for
+	// concurrent use; see Concurrency.
+	OCRSelect func(page Page) bool
 
 	// Concurrency bounds how many pages are extracted at once. Zero picks
 	// a worker per available processor; one extracts sequentially.

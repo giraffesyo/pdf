@@ -308,6 +308,83 @@ func TestOCRHook(t *testing.T) {
 	}
 }
 
+// The three policies are the answers worth naming, not the only
+// reasonable ones. A predicate says what a particular document needs.
+func TestOCRSelectOverridesThePolicy(t *testing.T) {
+	// A page with typeset text and one image: OCRTextlessPages passes it
+	// by, which is the case a threshold exists to catch.
+	data := imageDoc("BT /F1 12 Tf 72 700 Td (Typeset) Tj ET /Im1 Do", grayImageObj(1, 1, "\x00", ""))
+
+	t.Run("selects a page the policy would skip", func(t *testing.T) {
+		var seen Page
+		doc, err := extractOptions(t, data, Options{
+			OCRSelect: func(page Page) bool {
+				seen = page
+				return len(page.Glyphs) < 100 // a floor on glyphs per page
+			},
+			OCR: OCRFunc(func(context.Context, OCRRequest) ([]Glyph, error) {
+				return []Glyph{{Text: "scanned", X: 10, Y: 20, Advance: 40, Size: 12}}, nil
+			}),
+		})
+		if err != nil {
+			t.Fatalf("extract: %v", err)
+		}
+		if !strings.Contains(doc.Text(), "scanned") {
+			t.Errorf("text = %q, want the OCR'd word: the predicate selected this page", doc.Text())
+		}
+		// The page a predicate judges is the one the content streams
+		// produced: its glyphs and its image count, but not image data,
+		// which is read only once something asks for it.
+		if len(seen.Glyphs) == 0 {
+			t.Error("predicate saw no glyphs, want the page's own text")
+		}
+		if seen.ImageCount != 1 {
+			t.Errorf("predicate saw ImageCount = %d, want 1", seen.ImageCount)
+		}
+		if len(seen.Images) != 0 {
+			t.Errorf("predicate saw %d images, want none loaded yet", len(seen.Images))
+		}
+	})
+
+	t.Run("skips a page the policy would select", func(t *testing.T) {
+		calls := 0
+		doc, err := extractOptions(t, simpleDoc(""), Options{
+			OCRPolicy: OCRAllPages,
+			OCRSelect: func(Page) bool { return false },
+			OCR: OCRFunc(func(context.Context, OCRRequest) ([]Glyph, error) {
+				calls++
+				return []Glyph{{Text: "scanned", Advance: 1, Size: 1}}, nil
+			}),
+		})
+		if err != nil {
+			t.Fatalf("extract: %v", err)
+		}
+		if calls != 0 {
+			t.Errorf("OCR calls = %d, want none: the predicate overrides the policy", calls)
+		}
+		if doc.Text() != "" {
+			t.Errorf("text = %q, want none", doc.Text())
+		}
+	})
+
+	// Without a predicate the policy still decides, so the field is
+	// additive for every existing caller.
+	t.Run("policy still applies when unset", func(t *testing.T) {
+		calls := 0
+		if _, err := extractOptions(t, data, Options{
+			OCR: OCRFunc(func(context.Context, OCRRequest) ([]Glyph, error) {
+				calls++
+				return nil, nil
+			}),
+		}); err != nil {
+			t.Fatalf("extract: %v", err)
+		}
+		if calls != 0 {
+			t.Errorf("OCR calls = %d, want none: the page has text and the default policy is textless-only", calls)
+		}
+	})
+}
+
 func TestOptionValidation(t *testing.T) {
 	data := simpleDoc("")
 	for _, options := range []Options{

@@ -101,11 +101,24 @@ returns positioned glyphs that join the page's text — `Page.Text`,
 `TextIn` and the layout modes then treat OCR words like typeset ones.
 `Options.OCRPolicy` selects the pages: those with no text (the default),
 those that paint an image (mixed typeset text and scanned figures), or
-all of them. `Page.OCRGlyphs` counts the glyphs that came from OCR.
-Without `IncludeImages`, image data is read only for the pages the policy
-selects and is not retained afterwards. OCR runs concurrently across
-pages under `Options.Concurrency`, so implementations are expected to be
-safe for concurrent use.
+all of them. Where none of the three is the rule a document needs —
+a form with a typed header over a scanned body has text, so the default
+passes it by — `Options.OCRSelect` takes a predicate instead:
+
+```go
+OCRSelect: func(page pdf.Page) bool {
+    return len(page.Glyphs) < 100 && page.ImageCount > 0
+},
+```
+
+`Page.OCRGlyphs` counts the glyphs that came from OCR. Without
+`IncludeImages`, image data is read only for the pages the policy selects
+and is not retained afterwards; `Page.ImageCount` is reported either way,
+so a page with no text can be told apart from a page with no images —
+the first is a scan an OCR engine can read, the second has had its text
+converted to vector outlines and needs a renderer. OCR runs concurrently
+across pages under `Options.Concurrency`, so implementations — and an
+`OCRSelect` predicate — are expected to be safe for concurrent use.
 
 [`ocr/tesseract`](ocr/tesseract) is a reference implementation that shells
 out to the Tesseract command-line program (which must be installed), feeds
