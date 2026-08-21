@@ -1,0 +1,4 @@
+pdf: page 3: unsupported: embedded OpenType font has no supported Unicode cmap
+pdf: page 4: unsupported: embedded OpenType font has no supported Unicode cmap
+pdf: page 5: unsupported: embedded OpenType font has no supported Unicode cmap
+pdf: page 12: unsupported: embedded OpenType font has no supported Unicode cmap
