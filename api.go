@@ -75,6 +75,19 @@ type Limits struct {
 	MaxOperatorsPerPage int
 	MaxGlyphsPerPage    int
 	MaxFormDepth        int
+
+	// MaxImagesPerPage bounds how many image paintings a page records
+	// when images are collected. Default 10,000.
+	MaxImagesPerPage int
+	// MaxImageBytesPerPage bounds the image data read for one page, over
+	// all its distinct images, each of which MaxStreamBytes bounds on its
+	// own. Images past the budget are left out with a WarningStreamLimit.
+	// Default 256 MiB.
+	MaxImageBytesPerPage int
+	// MaxImagePixels bounds the images Image.Decode is willing to
+	// allocate, in pixels. Default 64 Mi (a 600 dpi letter page is
+	// 34 Mi). Larger images are still reported with their encoded Data.
+	MaxImagePixels int
 }
 
 func (l Limits) normalized() Limits {
@@ -90,6 +103,15 @@ func (l Limits) normalized() Limits {
 	if l.MaxFormDepth == 0 {
 		l.MaxFormDepth = maxFormDepth
 	}
+	if l.MaxImagesPerPage == 0 {
+		l.MaxImagesPerPage = maxImagesPerPage
+	}
+	if l.MaxImageBytesPerPage == 0 {
+		l.MaxImageBytesPerPage = maxImageBytesPerPage
+	}
+	if l.MaxImagePixels == 0 {
+		l.MaxImagePixels = maxImagePixels
+	}
 	return l
 }
 
@@ -103,6 +125,12 @@ func (l Limits) validate() error {
 		return errors.New("pdf: MaxGlyphsPerPage must not be negative")
 	case l.MaxFormDepth < 0:
 		return errors.New("pdf: MaxFormDepth must not be negative")
+	case l.MaxImagesPerPage < 0:
+		return errors.New("pdf: MaxImagesPerPage must not be negative")
+	case l.MaxImageBytesPerPage < 0:
+		return errors.New("pdf: MaxImageBytesPerPage must not be negative")
+	case l.MaxImagePixels < 0:
+		return errors.New("pdf: MaxImagePixels must not be negative")
 	default:
 		return nil
 	}
@@ -206,8 +234,14 @@ type FormField struct {
 // package. The returned bytes use normal PDF CMap syntax.
 type CMapResolver func(name string) ([]byte, error)
 
-// OCRRequest is passed to an external OCR implementation for a page whose
-// content streams produced no text. Reader and Size identify the original PDF.
+// OCRRequest is passed to an external OCR implementation for a page the
+// OCRPolicy selects. Page carries whatever the content streams yielded —
+// its Glyphs, and its Images with their placement and encoded data — so
+// an implementation can OCR the page's images directly, through
+// Image.Decode or by handing the still-encoded Data to an engine that
+// reads JPEG. Reader and Size identify the original PDF for
+// implementations that render the page with an external renderer
+// instead, which is what text converted to vector outlines needs.
 type OCRRequest struct {
 	Reader     io.ReaderAt
 	Size       int64
@@ -215,11 +249,36 @@ type OCRRequest struct {
 	Page       Page
 }
 
-// OCR extracts text for an image-only page. Implementations may invoke an
-// external renderer or OCR engine; the core package remains dependency-free.
+// OCR supplies text for pages the content streams cannot. Implementations
+// invoke an external renderer or OCR engine; the core package remains
+// dependency-free. The glyphs returned are positioned in unrotated page
+// space (Image.ToPage maps an engine's image coordinates there) and are
+// appended to the page's glyphs; Page.OCRGlyphs counts them. Glyphs
+// returned together with an error are kept, and the error is recorded as
+// a WarningOCR.
+//
+// Pages are OCR'd concurrently when Options.Concurrency allows: an
+// implementation must be safe for concurrent use, or the caller sets
+// Concurrency to one.
 type OCR interface {
 	ExtractPage(context.Context, OCRRequest) ([]Glyph, error)
 }
+
+// OCRPolicy selects the pages an OCR implementation is asked about.
+type OCRPolicy uint8
+
+const (
+	// OCRTextlessPages selects pages whose content streams produced no
+	// glyphs: scanned pages, and pages whose text was converted to
+	// outlines. This is the default.
+	OCRTextlessPages OCRPolicy = iota
+	// OCRImagePages selects pages that paint at least one image, with or
+	// without text of their own, for documents that mix typeset text and
+	// scanned figures or stamps.
+	OCRImagePages
+	// OCRAllPages selects every extracted page.
+	OCRAllPages
+)
 
 // OCRFunc adapts a function to OCR.
 type OCRFunc func(context.Context, OCRRequest) ([]Glyph, error)
@@ -243,6 +302,11 @@ type Options struct {
 	IncludeOutlines    bool
 	IncludeAnnotations bool
 	IncludeFormValues  bool
+	// IncludeImages reports the images each page paints in Page.Images,
+	// with their placement and their data as described by Image. Without
+	// it image data is never read, except for the pages an OCR
+	// implementation is asked about, and those pages do not retain it.
+	IncludeImages bool
 
 	// PreserveLigatures keeps the Unicode presentation forms U+FB00–U+FB06
 	// (ﬀ ﬁ ﬂ ﬃ ﬄ ﬅ ﬆ) in glyph text. By default they fold to their letter
@@ -253,7 +317,12 @@ type Options struct {
 	PreserveLigatures bool
 
 	CMapResolver CMapResolver
-	OCR          OCR
+
+	// OCR is asked for text on the pages OCRPolicy selects. It runs after
+	// the page's content streams are extracted, with the page's glyphs
+	// and images in hand.
+	OCR       OCR
+	OCRPolicy OCRPolicy
 
 	// Concurrency bounds how many pages are extracted at once. Zero picks
 	// a worker per available processor; one extracts sequentially.
@@ -261,9 +330,12 @@ type Options struct {
 	// their warnings come out in the same order.
 	//
 	// Pages run concurrently only when nothing observable depends on the
-	// order they execute in. Strict stops at the first warning, and OCR
-	// and CMapResolver are caller code, so those extract sequentially
-	// whatever this is set to.
+	// order they execute in. Strict stops at the first warning, and
+	// CMapResolver is caller code that need not be safe for concurrent
+	// use, so those extract sequentially whatever this is set to. OCR
+	// implementations are called concurrently, since OCR dominates the
+	// cost of a scanned document; set Concurrency to one for an engine
+	// that cannot share.
 	Concurrency int
 }
 
@@ -286,6 +358,11 @@ func (o Options) validate() error {
 	}
 	if o.Concurrency < 0 {
 		return errors.New("pdf: Concurrency must not be negative")
+	}
+	switch o.OCRPolicy {
+	case OCRTextlessPages, OCRImagePages, OCRAllPages:
+	default:
+		return errors.New("pdf: unknown OCR policy")
 	}
 	return nil
 }

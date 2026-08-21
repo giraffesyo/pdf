@@ -11,13 +11,17 @@ import (
 // /DecodeParms (each of which may be a single value or an array). The
 // returned release function hands pooled decoder state back once the
 // reader is no longer used; it is nil when the chain holds none.
-func (r *Reader) applyFilters(body io.Reader, d dict) (io.Reader, func(), error) {
+//
+// With untilImage set the chain stops at the first image codec, which is
+// returned with its parameters rather than applied; otherwise an image
+// codec in the chain is an error, as it is for any non-image stream.
+func (r *Reader) applyFilters(body io.Reader, d dict, untilImage bool) (io.Reader, func(), ImageFilter, error) {
 	filters := filterNames(d)
 	if len(filters) == 0 {
-		return body, nil, nil
+		return body, nil, ImageFilter{}, nil
 	}
 	if len(filters) > maxFilterChain {
-		return nil, nil, fmt.Errorf("pdf: filter chain of %d exceeds limit", len(filters))
+		return nil, nil, ImageFilter{}, fmt.Errorf("pdf: filter chain of %d exceeds limit", len(filters))
 	}
 	parms := decodeParms(r, d, len(filters))
 	rd := body
@@ -28,20 +32,64 @@ func (r *Reader) applyFilters(body io.Reader, d dict) (io.Reader, func(), error)
 		}
 	}
 	for i, name := range filters {
+		if codec, ok := filter.ImageCodec(name); ok && untilImage {
+			// Only the last filter may be an image codec: nothing decodes
+			// the codec's output into a further filter's input.
+			if i != len(filters)-1 {
+				release()
+				return nil, nil, ImageFilter{}, fmt.Errorf("pdf: image codec /%s is not the last stream filter", codec)
+			}
+			if len(releasers) == 0 {
+				release = nil
+			}
+			return rd, release, ImageFilter{Name: codec, Parms: decodeParmValue(r, d, i)}, nil
+		}
 		var err error
 		rd, err = filter.Apply(rd, name, parms[i])
 		if err != nil {
 			release()
-			return nil, nil, err
+			return nil, nil, ImageFilter{}, err
 		}
 		if rel, ok := rd.(filter.Releaser); ok {
 			releasers = append(releasers, rel)
 		}
 	}
 	if len(releasers) == 0 {
-		return rd, nil, nil
+		return rd, nil, ImageFilter{}, nil
 	}
-	return rd, release, nil
+	return rd, release, ImageFilter{}, nil
+}
+
+// ImageFilter is the image codec an image stream's data is still encoded
+// with after ImageReader applied the general-purpose filters, together
+// with the codec's /DecodeParms dictionary (null when absent). Name is the
+// codec's full name — DCTDecode, JPXDecode, CCITTFaxDecode or JBIG2Decode —
+// even when the stream abbreviates it, or "" when the data is fully
+// decoded samples.
+type ImageFilter struct {
+	Name  string
+	Parms Value
+}
+
+// decodeParmValue returns the i-th filter's /DecodeParms dictionary as a
+// Value, so callers can resolve entries the filter layer does not model
+// (a /JBIG2Globals stream, for example).
+func decodeParmValue(r *Reader, d dict, i int) Value {
+	pv, ok := d["DecodeParms"]
+	if !ok {
+		pv = d["DP"]
+	}
+	switch x := pv.(type) {
+	case dict:
+		if i == 0 {
+			return Value{r: r, data: x}
+		}
+	case []Value:
+		if i < len(x) {
+			return x[i]
+		}
+	}
+	return Value{}
 }
 
 // filterNames returns the /Filter (or abbreviated /F) entries in order.

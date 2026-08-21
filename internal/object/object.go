@@ -279,3 +279,20 @@ func (v Value) Reader() (io.ReadCloser, error) {
 	}
 	return v.r.streamReader(s)
 }
+
+// ImageReader returns a reader over an image stream's bytes after
+// decryption and the general-purpose filters, stopping at the image
+// codec (DCTDecode, JPXDecode, CCITTFaxDecode or JBIG2Decode) if the
+// chain ends in one: the codec and its parameters are returned for the
+// caller to decode, and the reader yields the still-encoded image data.
+// Without an image codec the reader yields raw samples and the returned
+// ImageFilter is zero. It errors for non-stream values and on decode
+// failure.
+func (v Value) ImageReader() (io.ReadCloser, ImageFilter, error) {
+	v = v.resolve()
+	s, ok := v.data.(*stream)
+	if !ok {
+		return nil, ImageFilter{}, fmt.Errorf("pdf: ImageReader on %s, not a stream", v.Kind())
+	}
+	return v.r.imageReader(s)
+}

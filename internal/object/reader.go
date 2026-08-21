@@ -379,27 +379,46 @@ func (r *Reader) decryptStrings(v any, num, gen int) any {
 	}
 }
 
-// streamReader returns the stream's decoded bytes: raw section →
-// decryption → filter chain.
-func (r *Reader) streamReader(s *stream) (io.ReadCloser, error) {
+// streamBody returns the stream's raw section, decrypted.
+func (r *Reader) streamBody(s *stream) io.Reader {
 	length := s.length
 	if length < 0 {
 		length = r.scanEndstream(s.offset)
 	}
 	var body io.Reader = io.NewSectionReader(r.ra, s.offset, length)
-
 	if r.dec != nil && !r.streamExempt(s) {
 		body = r.dec.DecryptStream(s.owner.num, s.owner.gen, body)
 	}
+	return body
+}
 
-	rd, release, err := r.applyFilters(body, s.d)
+// streamReader returns the stream's decoded bytes: raw section →
+// decryption → filter chain.
+func (r *Reader) streamReader(s *stream) (io.ReadCloser, error) {
+	body := r.streamBody(s)
+	rd, release, _, err := r.applyFilters(body, s.d, false)
 	if err != nil {
 		return nil, err
 	}
-	if release == nil {
-		return io.NopCloser(rd), nil
+	return closingReader(rd, release), nil
+}
+
+// imageReader is streamReader stopping at an image codec, which is
+// returned instead of applied.
+func (r *Reader) imageReader(s *stream) (io.ReadCloser, ImageFilter, error) {
+	body := r.streamBody(s)
+	rd, release, codec, err := r.applyFilters(body, s.d, true)
+	if err != nil {
+		return nil, ImageFilter{}, err
 	}
-	return &releasingReader{Reader: rd, release: release}, nil
+	return closingReader(rd, release), codec, nil
+}
+
+func closingReader(rd io.Reader, release func()) io.ReadCloser {
+	if release == nil {
+		return io.NopCloser(rd)
+	}
+	return &releasingReader{Reader: rd, release: release}
 }
 
 // releasingReader returns pooled decoder state on Close. Close is

@@ -114,12 +114,16 @@ func TestConcurrentExtractionHonoursOptions(t *testing.T) {
 		}
 		for name, opts := range map[string]Options{
 			"strict":   {Concurrency: 8, Strict: true},
-			"ocr":      {Concurrency: 8, OCR: OCRFunc(func(context.Context, OCRRequest) ([]Glyph, error) { return nil, nil })},
 			"resolver": {Concurrency: 8, CMapResolver: func(string) ([]byte, error) { return nil, nil }},
 		} {
 			if got := pageWorkers(opts, 10); got != 1 {
 				t.Errorf("%s: workers = %d, want 1", name, got)
 			}
+		}
+		// OCR implementations are safe for concurrent use by contract.
+		ocr := Options{Concurrency: 8, OCR: OCRFunc(func(context.Context, OCRRequest) ([]Glyph, error) { return nil, nil })}
+		if got := pageWorkers(ocr, 10); got != 8 {
+			t.Errorf("ocr: workers = %d, want 8", got)
 		}
 	})
 
