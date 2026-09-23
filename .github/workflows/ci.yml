@@ -110,7 +110,7 @@ jobs:
           } | tee "$GITHUB_WORKSPACE/base-bench.txt"
       - name: record base benchmark
         if: github.event_name == 'pull_request'
-        uses: benchmark-action/github-action-benchmark@v1.22.1
+        uses: benchmark-action/github-action-benchmark@v1.22.2
         with:
           name: PDF extraction
           tool: go
@@ -126,7 +126,7 @@ jobs:
           } | tee "$GITHUB_WORKSPACE/head-bench.txt"
       - name: check for benchmark regressions
         if: github.event_name == 'pull_request'
-        uses: benchmark-action/github-action-benchmark@v1.22.1
+        uses: benchmark-action/github-action-benchmark@v1.22.2
         with:
           name: PDF extraction
           tool: go
