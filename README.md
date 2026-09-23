@@ -201,10 +201,10 @@ whether extraction completes safely. A comparator that returns incorrect
 text, errors, or panics is excluded from the performance run for that
 fixture.
 
-Results below were measured on 2026-07-23 from the current worktree based
-on commit `4d13aa9`, using Go `1.26.4` on macOS `26.5.1` (`darwin/arm64`,
-Apple M5 Pro). Values are one run of
-`go test -bench . -benchmem -run '^$' -count=1 ./...`; rerun on your own
+Results below were measured on 2026-09-23 at commit `f238684`, using Go
+`1.27.0` on macOS `26.5.1` (`darwin/arm64`, Apple M5 Pro). Values are the
+median of five runs of
+`go test -bench . -benchmem -run '^$' -count=5 ./...`; rerun on your own
 hardware before making a performance decision.
 
 | Corpus | this package | ledongthuc/pdf | rsc.io/pdf |
@@ -220,32 +220,30 @@ Latency (`ns/op`):
 
 | Corpus | this package | ledongthuc/pdf |
 |---|---:|---:|
-| simple | 13,306 | 14,478 |
-| Form XObject | 16,187 | incorrect text |
-| Flate content | 20,431 | 20,407 |
-| xref stream | 13,879 | 14,337 |
-| object stream | 14,702 | 22,756 |
-| RC4-encrypted | 34,550 | unsupported |
+| simple | 9,358 | 14,614 |
+| Form XObject | 11,007 | incorrect text |
+| Flate content | 10,450 | 19,881 |
+| xref stream | 9,736 | 13,759 |
+| object stream | 10,545 | 22,254 |
+| RC4-encrypted | 30,332 | unsupported |
 
 Memory (`B/op`) and allocations (`allocs/op`):
 
 | Corpus | this package B/op | ledongthuc/pdf B/op | this package allocs/op | ledongthuc/pdf allocs/op |
 |---|---:|---:|---:|---:|
-| simple | 63,184 | 62,960 | 162 | 368 |
-| Form XObject | 67,560 | incorrect text | 207 | incorrect text |
-| Flate content | 108,624 | 107,888 | 180 | 386 |
-| xref stream | 64,088 | 62,880 | 166 | 365 |
-| object stream | 64,584 | 100,336 | 185 | 541 |
-| RC4-encrypted | 95,808 | unsupported | 324 | unsupported |
+| simple | 41,472 | 62,960 | 172 | 368 |
+| Form XObject | 44,728 | incorrect text | 218 | incorrect text |
+| Flate content | 43,272 | 107,888 | 184 | 386 |
+| xref stream | 42,472 | 62,904 | 176 | 366 |
+| object stream | 44,856 | 100,360 | 201 | 542 |
+| RC4-encrypted | 72,768 | unsupported | 333 | unsupported |
 
 To reproduce the support matrix and performance measurements:
 
 ```
 cd benchmarks
 go test -run TestCompetitorComparison -v ./...   # support matrix
-go test -bench . -benchmem -run '^$' -count=1 ./... # raw results above
-# For a less noisy local comparison, repeat and analyze the output:
-go test -bench . -benchmem -run '^$' -count=5 ./...
+go test -bench . -benchmem -run '^$' -count=5 ./... # results above (medians)
 ```
 
 The corpus is synthetic and deliberately small: it measures parser and
@@ -263,9 +261,12 @@ text the same way. Output does not depend on it: pages, glyphs, and
 warnings come out in the same order either way. `Options.Concurrency`
 sets the number of workers — zero, the default, picks one per processor
 up to a cap and falls back to sequential extraction for short documents,
-and one extracts sequentially. Strict extraction, `OCR`, and
-`CMapResolver` always run sequentially, so a caller's own code is never
-invoked concurrently.
+and one extracts sequentially. Strict extraction and `CMapResolver`
+always run sequentially: strict mode stops at the first warning, and a
+resolver need not be safe for concurrent use. `OCR` implementations and
+an `OCRSelect` predicate are the exception — they are called
+concurrently, since OCR dominates the cost of a scanned document — so set
+`Concurrency` to one for an engine that cannot be shared.
 
 ## Regression corpus
 
