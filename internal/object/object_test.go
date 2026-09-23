@@ -3,6 +3,7 @@ package object
 import (
 	"bytes"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/giraffesyo/pdf/pdftest"
@@ -154,6 +155,45 @@ func TestWrongStreamLengthRecovered(t *testing.T) {
 	r := open(t, doc)
 	if got := streamText(t, r.Page(1).Key("Contents")); got != "the real content is longer" {
 		t.Errorf("recovered content = %q", got)
+	}
+}
+
+// TestObjectLargerThanParseWindow covers direct objects that outgrow the
+// parse window parseObjectAt starts with. The parser closes open arrays
+// and dictionaries at the end of its input, so a window ending inside an
+// object must be detected and grown rather than read as a short object.
+// InDesign writes page dictionaries like this: tens of kilobytes of
+// /PieceInfo before /Type and /Resources. Sweeping the padding moves the
+// window edge through a number, the array's end, the keys after it, and
+// the "stream" keyword and its EOL.
+func TestObjectLargerThanParseWindow(t *testing.T) {
+	var nums strings.Builder
+	for nums.Len() < 4000 {
+		nums.WriteString("575.087 ")
+	}
+	count := strings.Count(nums.String(), " ")
+	for pad := range 160 {
+		fill := strings.Repeat("x", pad+1)
+		doc := pdftest.Build(1,
+			pdftest.Catalog(2),
+			pdftest.Pages(3),
+			"<< /PieceInfo << /Pad /"+fill+" /Map ["+nums.String()+"] >> /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+			pdftest.Stream("/Pad /"+fill+" /Map ["+nums.String()+"]", "BT ET"),
+		)
+		r := open(t, doc)
+		page := r.Page(1)
+		if got := page.Key("Type").Name(); got != "Page" {
+			t.Fatalf("pad %d: page /Type = %q, want Page", pad, got)
+		}
+		if n := page.Key("PieceInfo").Key("Map").Len(); n != count {
+			t.Fatalf("pad %d: /Map has %d elements, want %d", pad, n, count)
+		}
+		if got := streamText(t, page.Key("Contents")); got != "BT ET" {
+			t.Fatalf("pad %d: contents = %q", pad, got)
+		}
+		if err := r.Err(); err != nil {
+			t.Fatalf("pad %d: Err = %v", pad, err)
+		}
 	}
 }
 
