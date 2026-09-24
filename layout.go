@@ -201,7 +201,13 @@ func isDuplicateGlyph(a, b *Glyph, dir Point) bool {
 	d := Point{X: b.X - a.X, Y: b.Y - a.Y}
 	normal := Point{X: -dir.Y, Y: dir.X}
 	size := max(a.Size, 1)
-	return math.Abs(dotPoint(d, dir)) <= duplicateAlong*size &&
+	along := duplicateAlong * size
+	if adv := math.Abs(a.Advance); adv > 0 {
+		// Never as far as the next glyph, whatever the size claims: a
+		// third of the glyph's width, as PDFBox bounds it.
+		along = min(along, adv/3)
+	}
+	return math.Abs(dotPoint(d, dir)) <= along &&
 		math.Abs(dotPoint(d, normal)) <= duplicateAcross*size
 }
 

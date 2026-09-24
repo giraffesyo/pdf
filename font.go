@@ -1,7 +1,9 @@
 package pdf
 
 import (
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,7 +45,8 @@ type fontInfo struct {
 	simpleText [256]atomic.Pointer[string]
 
 	firstChar int
-	widths    []float64          // simple fonts: indexed by code-firstChar
+	widths    []float64          // simple fonts: indexed by code-firstChar, in 1/1000 text space
+	emScale   float64            // a Type3 font's em in units of the font size; 0 means 1
 	cidWidths map[uint32]float64 // composite fonts
 	defWidth  float64
 
@@ -162,29 +165,146 @@ func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontI
 	}
 
 	// Simple font: /FirstChar + /Widths, standard encoding as fallback.
-	// Exception: a Type3 font without ToUnicode draws glyph procedures
-	// addressed by arbitrary codes; no encoding fallback can recover text,
-	// and passing raw codes through produces convincing-looking garbage.
-	// Dropping the glyphs lets truly image-like documents fail honestly.
-	if fv.Key("Subtype").Name() == "Type3" && f.toUni == nil {
-		return f
-	}
 	f.differences = parseDifferences(fv.Key("Encoding").Key("Differences"))
-	f.fallback, f.fallbackFirst = fallbackEncoding(fv, f.differences)
-	f.loadEmbedded = func() (map[uint32]string, error) {
-		return embeddedSimpleFallback(fv, streamLimit)
+	widthScale := 1.0
+	if fv.Key("Subtype").Name() == "Type3" {
+		// A Type3 font's widths are in its own glyph space, mapped to text
+		// space by /FontMatrix rather than the 1/1000 of other fonts, and
+		// its em follows the same matrix. Its glyphs are procedures with
+		// no program to consult and no standard encoding: a code carries
+		// text only through ToUnicode or a /Differences glyph name the
+		// Adobe Glyph List recognizes — as TeX's Type3 fonts name theirs.
+		// Unrecognized names, such as dvips's a0, a1, …, stay dropped
+		// rather than passing raw codes through as convincing garbage.
+		fm := type3FontMatrix(fv)
+		widthScale = fm[0] * 1000
+		f.emScale = type3EmScale(fv, fm)
+		f.differences = numberedGlyphNames(fv.Key("Encoding").Key("Differences"), f.differences)
+		// An encoding that names its base states how the other codes read:
+		// a glyph whose name says nothing follows it.
+		switch base := fv.Key("Encoding").Key("BaseEncoding").Name(); base {
+		case "WinAnsiEncoding", "MacRomanEncoding", "StandardEncoding":
+			for code, text := range f.differences {
+				if text == "" {
+					delete(f.differences, code)
+				}
+			}
+			f.fallback, f.fallbackFirst = encoding.New(base, nil), true
+		}
+	} else {
+		f.fallback, f.fallbackFirst = fallbackEncoding(fv, f.differences)
+		f.loadEmbedded = func() (map[uint32]string, error) {
+			return embeddedSimpleFallback(fv, streamLimit)
+		}
 	}
 	f.firstChar = int(intOr(fv.Key("FirstChar"), 0))
 	if wArr := fv.Key("Widths"); wArr.Kind() == object.Array {
 		f.widths = make([]float64, wArr.Len())
 		for i := range f.widths {
 			f.widths[i], _ = wArr.Index(i).Float64()
+			f.widths[i] *= widthScale
 		}
 	}
 	if mw, ok := fv.Key("FontDescriptor").Key("MissingWidth").Float64(); ok {
-		f.defWidth = mw
+		f.defWidth = mw * widthScale
 	}
 	return f
+}
+
+// numberedGlyphNames fills in text for glyph names that number their own
+// code as dvips names them — /a97 for the glyph at code 97 — in the Type3
+// bitmap fonts it writes for TeX text, encoded like ASCII. The number must
+// equal the code the name is assigned to, so arbitrary numbering carries
+// no text, nor do other prefixes, which no text-bearing producer is known
+// to use; and
+// only letters, digits, and the punctuation TeX's text encodings share
+// with ASCII count, not the positions where they place quotes, dashes,
+// and accents.
+func numberedGlyphNames(arr object.Value, differences map[byte]string) map[byte]string {
+	if arr.Kind() != object.Array {
+		return differences
+	}
+	code := -1
+	for i := range arr.Len() {
+		el := arr.Index(i)
+		switch el.Kind() {
+		case object.Integer:
+			n, _ := el.Int64()
+			code = int(n)
+		case object.Name:
+			if code >= 0 && code <= 0xFF && differences[byte(code)] == "" {
+				if text := numberedGlyphText(el.Name(), code); text != "" {
+					if differences == nil {
+						differences = map[byte]string{}
+					}
+					differences[byte(code)] = text
+				}
+			}
+			code++
+		}
+	}
+	return differences
+}
+
+func numberedGlyphText(name string, code int) string {
+	digits, dvips := strings.CutPrefix(name, "a")
+	if !dvips || digits == "" {
+		return ""
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n != code || n < 0x21 || n > 0x7A {
+		return ""
+	}
+	switch n {
+	case 0x22, 0x3C, 0x3E, 0x5C, 0x5E, 0x5F:
+		return "" // quotes, ¡ ¿, and accents in TeX's text encodings
+	}
+	return string(rune(n))
+}
+
+// type3EmScale estimates a Type3 font's em in units of the font size,
+// which layout uses as the glyphs' size. A Type3 glyph space has no fixed
+// em: the font's bounding box, mapped through its matrix, is the best
+// evidence, and failing that — many Type3 fonts leave it zero — the median
+// glyph width, taking a typical glyph as half an em wide.
+func type3EmScale(fv object.Value, fm matrix) float64 {
+	yScale := math.Hypot(fm[2], fm[3])
+	if box := rectFromValue(fv.Key("FontBBox")); box.MaxY > box.MinY {
+		if em := (box.MaxY - box.MinY) * yScale; em > 0 && !math.IsInf(em, 0) {
+			return em
+		}
+	}
+	var widths []float64
+	if arr := fv.Key("Widths"); arr.Kind() == object.Array {
+		for i := range arr.Len() {
+			if w, _ := arr.Index(i).Float64(); w > 0 {
+				widths = append(widths, w)
+			}
+		}
+	}
+	if len(widths) > 0 {
+		slices.Sort(widths)
+		if em := 2 * widths[len(widths)/2] * math.Abs(fm[0]); em > 0 && !math.IsInf(em, 0) {
+			return em
+		}
+	}
+	return yScale * 1000
+}
+
+// type3FontMatrix returns a Type3 font's /FontMatrix, or the 1/1000 scale
+// of other fonts when it is missing or degenerate.
+func type3FontMatrix(fv object.Value) matrix {
+	fm := matrix{0.001, 0, 0, 0.001, 0, 0}
+	if m := fv.Key("FontMatrix"); m.Kind() == object.Array && m.Len() == 6 {
+		var read matrix
+		for i := range read {
+			read[i], _ = m.Index(i).Float64()
+		}
+		if read[0] != 0 && read[3] != 0 && !math.IsInf(read[0], 0) && !math.IsNaN(read[0]) {
+			fm = read
+		}
+	}
+	return fm
 }
 
 // intOr returns the value's integer, or d for non-integers.
@@ -397,7 +517,9 @@ func (f *fontInfo) mapSimple(code uint32) string {
 
 func (f *fontInfo) resolveSimple(code uint32) string {
 	if f.toUni != nil {
-		if s, ok := f.toUni.unicode[codeKey{value: code, bytes: 1}]; ok {
+		// A ToUnicode entry mapping to control characters alone is broken,
+		// and the code's other sources may still read.
+		if s, ok := f.toUni.unicode[codeKey{value: code, bytes: 1}]; ok && sanitizeText(s, false) != "" {
 			return s
 		}
 	}
@@ -422,7 +544,7 @@ func (f *fontInfo) resolveSimple(code uint32) string {
 
 func (f *fontInfo) mapComposite(key codeKey, cid uint32) string {
 	if f.toUni != nil {
-		if s, ok := f.toUni.unicode[key]; ok {
+		if s, ok := f.toUni.unicode[key]; ok && sanitizeText(s, false) != "" {
 			return s
 		}
 	}

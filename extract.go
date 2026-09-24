@@ -1038,7 +1038,11 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 				adv += gs.wordSp * gs.hscale
 			}
 			if text := sanitizeText(d.text, w.foldLigatures); text != "" {
-				w.glyphs.add(positionedGlyph(text, trm, gs.fontSize, gs.rise, adv))
+				size := gs.fontSize
+				if f.emScale > 0 {
+					size *= f.emScale // a Type3 em, per its FontMatrix
+				}
+				w.glyphs.add(positionedGlyph(text, trm, size, gs.rise, adv))
 			}
 			tm = translated(tm, adv, 0)
 			trm = translated(trm, adv, 0)
@@ -1545,7 +1549,7 @@ func sanitize(s string) string { return sanitizeText(s, true) }
 func sanitizeText(s string, foldLigatures bool) string {
 	clean := true
 	for _, r := range s {
-		if isJunkRune(r) || r == '\u00a0' || foldLigatures && isLigatureRune(r) {
+		if isJunkRune(r) || r == '\u00a0' || r == '\t' || foldLigatures && isLigatureRune(r) {
 			clean = false
 			break
 		}
@@ -1557,8 +1561,8 @@ func sanitizeText(s string, foldLigatures bool) string {
 	b.Grow(len(s)) // every rewrite is no longer than its source
 	for _, r := range s {
 		switch {
-		case r == '\u00a0':
-			b.WriteByte(' ')
+		case r == '\u00a0', r == '\t':
+			b.WriteByte(' ') // a tab glyph is a space, as a ToUnicode map may say
 		case isJunkRune(r):
 		case foldLigatures && isLigatureRune(r):
 			b.WriteString(ligatureLetters[r-0xFB00])
