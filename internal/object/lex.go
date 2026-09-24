@@ -381,8 +381,12 @@ func (p *objParser) parseDict(depth int) (any, error) {
 			}
 			d[tok.str] = v
 		default:
-			// A non-name key is malformed; stop at the dictionary we have.
-			return d, nil
+			// A non-name key is malformed — stray tokens such as the "0 R"
+			// in "/X 1 0 R 0 R". Skip the object and read on to the next
+			// name, so the keys after it survive.
+			if _, err := p.parseFrom(tok, depth+1); errors.Is(err, errRecursion) {
+				return nil, err
+			}
 		}
 	}
 }

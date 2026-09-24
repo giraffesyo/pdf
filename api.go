@@ -304,11 +304,21 @@ type Options struct {
 	Limits   Limits
 	Layout   LayoutOptions
 
-	IgnoreArtifacts    bool
-	IncludeMetadata    bool
-	IncludeOutlines    bool
-	IncludeAnnotations bool
-	IncludeFormValues  bool
+	IgnoreArtifacts bool
+	// IgnoreAnnotationAppearances leaves out the text that annotations
+	// paint over the page: filled form fields, free-text comments, stamps.
+	// By default a page's glyphs include it, after the page's own content,
+	// as a viewer shows it and as poppler and MuPDF extract it; hidden
+	// annotations are skipped either way. Text and choice fields are drawn
+	// from their values when the form asks viewers to regenerate
+	// appearances (/NeedAppearances) or a field has none. IncludeAnnotations
+	// and IncludeFormValues report annotations and field values as data,
+	// independently of this.
+	IgnoreAnnotationAppearances bool
+	IncludeMetadata             bool
+	IncludeOutlines             bool
+	IncludeAnnotations          bool
+	IncludeFormValues           bool
 	// IncludeImages reports the images each page paints in Page.Images,
 	// with their placement and their data as described by Image. Without
 	// it image data is never read, except for the pages an OCR

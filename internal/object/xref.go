@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/giraffesyo/pdf/internal/safeio"
@@ -295,6 +296,7 @@ func (r *Reader) rebuildXref() error {
 		r.growXref(m.num + 1)
 		r.xref[m.num] = xrefEntry{kind: 1, offset: m.off, gen: m.gen}
 	}
+	r.indexObjectStreams(data, headers, bound)
 	// Prefer a real trailer; otherwise synthesize one from a located
 	// /Catalog so page navigation still works.
 	if td := r.lastTrailer(data); td != nil {
@@ -304,6 +306,67 @@ func (r *Reader) rebuildXref() error {
 	} else {
 		return errors.New("pdf: no cross-reference data and no catalog found")
 	}
+	return nil
+}
+
+// indexObjectStreams adds the objects packed in the file's object streams
+// to a rebuilt table: a header scan sees only direct objects, and a PDF
+// 1.5 file keeps most of its objects, the catalog and page tree among
+// them, in object streams. A direct object keeps precedence, and among
+// streams the one later in the file wins, as incremental updates append.
+// Streams that do not decode — encrypted ones, before the key exists —
+// are skipped.
+func (r *Reader) indexObjectStreams(data []byte, headers []objHeader, bound int) {
+	direct := make(map[int]bool, len(headers))
+	for _, m := range headers {
+		direct[m.num] = true
+	}
+	for _, m := range headers {
+		if m.num >= bound || r.xref[m.num].offset != m.off {
+			continue // not the live definition of its number
+		}
+		window := data[m.off:min(int64(len(data)), m.off+256)]
+		if !bytes.Contains(window, []byte("ObjStm")) {
+			continue
+		}
+		os, err := r.loadObjStm(m.num)
+		if err != nil {
+			continue
+		}
+		for idx, num := range os.nums {
+			if num <= 0 || num >= bound || direct[num] {
+				continue
+			}
+			r.growXref(num + 1)
+			r.xref[num] = xrefEntry{kind: 2, stmNum: m.num, stmIdx: idx}
+		}
+	}
+}
+
+// Repair rebuilds the cross-reference table by scanning the file for
+// object headers, for a table that parsed but locates objects wrongly —
+// offsets that land on another object or none, or a /Prev chain that
+// loops past the sections it needed. Objects the scan cannot see, those
+// packed in object streams, keep their previous entries. Repair resets
+// the object caches and error state, and keeps the decryption key; call
+// it before cloning. On failure r is left as it was.
+func (r *Reader) Repair() error {
+	old := slices.Clone(r.xref)
+	oldTrailer := r.trailer
+	if err := r.rebuildXref(); err != nil {
+		r.xref, r.trailer = old, oldTrailer
+		return err
+	}
+	for num, e := range old {
+		if e.kind == 2 && (num >= len(r.xref) || r.xref[num].kind == 0) {
+			r.growXref(num + 1)
+			r.xref[num] = e
+		}
+	}
+	r.cache = map[int]any{}
+	r.resolving = map[int]bool{}
+	r.objStms = newObjStmCache()
+	r.err = nil
 	return nil
 }
 
