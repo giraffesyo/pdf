@@ -124,3 +124,31 @@ func TestLayoutWhitespace(t *testing.T) {
 		t.Errorf("spaced text = %q", got)
 	}
 }
+
+// TestLayoutWordGaps: condensed faces set words 0.15 em apart, which is
+// still a word break (poppler breaks at 0.1 em); and a glyph kerned back
+// over the space drawn before it keeps the space before it, not after.
+func TestLayoutWordGaps(t *testing.T) {
+	var glyphs []Glyph
+	x := 10.0
+	for i, word := range []string{"Two", "years", "after"} {
+		if i > 0 {
+			x += 0.15 * 18 // a condensed word space, no space glyph
+		}
+		glyphs = append(glyphs, run(word, x, 100, 9, 18)...)
+		x += 9 * float64(len(word))
+	}
+	if got := (Page{Glyphs: glyphs}).Text(); got != "Two years after" {
+		t.Errorf("condensed text = %q", got)
+	}
+
+	kerned := concat(
+		run("doesn't", 10, 100, 6, 12),
+		[]Glyph{{Text: " ", X: 52, Y: 100, Advance: 6, Size: 12}},
+		run("work", 51.7, 100, 6, 12), // pulled back over the space
+		run("works", 150, 102, 6, 12), // a raised line joining the row
+	)
+	if got := (Page{Glyphs: kerned}).Text(); got != "doesn't work works" {
+		t.Errorf("kerned text = %q", got)
+	}
+}

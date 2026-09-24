@@ -152,6 +152,16 @@ func sortLineGlyphs(line *layoutLine) {
 			return a.index - b.index
 		}
 	})
+	// Kerning can pull a glyph back over the space drawn just before it,
+	// and the sort then puts the space after it, splitting the next word
+	// instead of this one. Restore the order they were drawn in.
+	for i := 1; i < len(line.glyphs); i++ {
+		g, space := line.glyphs[i-1], line.glyphs[i]
+		if space.index == g.index-1 && strings.TrimSpace(space.Text) == "" &&
+			glyphProjection(*space.Glyph, line.dir, false)-glyphProjection(*g.Glyph, line.dir, false) <= 0.1*max(g.Size, 1) {
+			line.glyphs[i-1], line.glyphs[i] = space, g
+		}
+	}
 }
 
 // Duplicate tolerances, as fractions of the font size along and across the
@@ -315,16 +325,18 @@ func splitOverlaidRuns(line *layoutLine) []layoutLine {
 }
 
 // layoutLineSorted reports whether the line's glyphs, which are in index
-// order, are already in non-decreasing baseline order — the order the
-// stable sort below would produce.
+// order, already read in order along it: no glyph starts before the glyphs
+// ahead of it by more than a tenth of its size. Kerning steps back that
+// far — over a space glyph, say — without the line being out of order,
+// and sorting would move the space past the glyph kerned over it.
 func layoutLineSorted(line *layoutLine) bool {
-	prev := math.Inf(-1)
+	reach := math.Inf(-1)
 	for _, g := range line.glyphs {
 		p := glyphProjection(*g.Glyph, line.dir, false)
-		if p < prev {
+		if p < reach-0.1*max(g.Size, 1) {
 			return false
 		}
-		prev = p
+		reach = max(reach, p)
 	}
 	return true
 }
@@ -396,11 +408,7 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 			case pending != "":
 				emit(pending)
 			case !strings.HasPrefix(glyph.Text, " "):
-				threshold := 0.17 * glyph.Size
-				if threshold <= 0 {
-					threshold = 1
-				}
-				if start-prevEnd > threshold {
+				if start-prevEnd > wordGap(glyph.Size) {
 					emit(" ")
 				}
 			}
@@ -413,6 +421,20 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 		prevEnd = end
 		prevIndex = glyph.index
 	}
+}
+
+// minWordGapEm is the gap between glyphs, in font sizes, that separates
+// words — poppler's minWordBreakSpace. Wider thresholds join the words of
+// condensed faces; measured against pdftotext over some two thousand test
+// files, 0.1 agrees best, and adapting it to a line's letter spacing did
+// worse.
+const minWordGapEm = 0.1
+
+func wordGap(size float64) float64 {
+	if gap := minWordGapEm * size; gap > 0 {
+		return gap
+	}
+	return 1
 }
 
 func glyphDirection(g Glyph) Point { return g.direction() }
