@@ -26,7 +26,7 @@ func newAES256(c Config, password []byte) (*Decryptor, error) {
 	if bytes.Equal(hash2B(password, uValSalt, nil, c.R), uHash) {
 		ik := hash2B(password, uKeySalt, nil, c.R)
 		if key := aesNoPadCBC(ik, c.UE); key != nil {
-			return &Decryptor{key: key, stmF: AESV3, strF: AESV3}, nil
+			return aes256Decryptor(c, key), nil
 		}
 	}
 
@@ -35,10 +35,24 @@ func newAES256(c Config, password []byte) (*Decryptor, error) {
 	if bytes.Equal(hash2B(password, oValSalt, c.U[:48], c.R), oHash) {
 		ik := hash2B(password, oKeySalt, c.U[:48], c.R)
 		if key := aesNoPadCBC(ik, c.OE); key != nil {
-			return &Decryptor{key: key, stmF: AESV3, strF: AESV3}, nil
+			return aes256Decryptor(c, key), nil
 		}
 	}
 	return nil, ErrPasswordRequired
+}
+
+// aes256Decryptor selects the string and stream methods through the
+// crypt filters, as for V4. A revision 5 or 6 file names its filters; one
+// that omits them is read as AES-256 throughout, as before crypt filters
+// were consulted.
+func aes256Decryptor(c Config, key []byte) *Decryptor {
+	method := func(name string) Method {
+		if name == "" {
+			return AESV3
+		}
+		return methodForFilter(c, name)
+	}
+	return &Decryptor{key: key, stmF: method(c.StmF), strF: method(c.StrF)}
 }
 
 // hash2B computes the password hash. For R5 it is a single SHA-256; for R6

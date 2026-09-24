@@ -107,3 +107,36 @@ func TestHash2BRevision5IsSHA256(t *testing.T) {
 		t.Error("hash2B must return 32 bytes")
 	}
 }
+
+// TestIdentityCryptFilters: a document can encrypt only its attachments,
+// naming the Identity crypt filter for strings and streams and a real one
+// under /EFF. Its content opens without the password, and reads as is;
+// with the password, the named filters still apply.
+func TestIdentityCryptFilters(t *testing.T) {
+	fileKey := bytes.Repeat([]byte{0x3C}, 32)
+	plain := []byte("content stream in the clear")
+	for _, revision := range []int{5, 6} {
+		cfg := buildAES256Pw(t, revision, fileKey, []byte("attachment"), []byte("owner"))
+		cfg.StmF, cfg.StrF = "Identity", "Identity"
+		d, err := New(cfg)
+		if err != nil {
+			t.Fatalf("R%d without password: %v", revision, err)
+		}
+		if got := d.DecryptStreamData(4, 0, plain); !bytes.Equal(got, plain) {
+			t.Errorf("R%d stream = %q", revision, got)
+		}
+		d, err = NewWithPassword(cfg, []byte("attachment"))
+		if err != nil {
+			t.Fatalf("R%d with password: %v", revision, err)
+		}
+		if got := d.DecryptString(4, 0, plain); !bytes.Equal(got, plain) {
+			t.Errorf("R%d string with password = %q", revision, got)
+		}
+	}
+	// A filter that encrypts content still needs the password.
+	cfg := buildAES256Pw(t, 6, fileKey, []byte("attachment"), []byte("owner"))
+	cfg.StrF = "Identity"
+	if _, err := New(cfg); !errors.Is(err, ErrPasswordRequired) {
+		t.Errorf("AESV3 streams without password: err = %v", err)
+	}
+}
