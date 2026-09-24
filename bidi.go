@@ -98,6 +98,9 @@ func writeBidiLine(b *strings.Builder, line layoutLine) {
 
 // logicalOrder reorders pieces given in visual order into logical order.
 func logicalOrder(pieces []string) []string {
+	if len(pieces) == 0 {
+		return nil
+	}
 	classes := make([]bidiClass, len(pieces))
 	right, left := 0, 0
 	for i, p := range pieces {
