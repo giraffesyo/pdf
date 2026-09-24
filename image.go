@@ -12,6 +12,7 @@ import (
 	"github.com/giraffesyo/pdf/internal/codec/ccitt"
 	"github.com/giraffesyo/pdf/internal/codec/dct"
 	"github.com/giraffesyo/pdf/internal/codec/jbig2"
+	"github.com/giraffesyo/pdf/internal/codec/jpx"
 	"github.com/giraffesyo/pdf/internal/filter"
 	"github.com/giraffesyo/pdf/internal/function"
 	"github.com/giraffesyo/pdf/internal/object"
@@ -115,10 +116,13 @@ func (im Image) Bounds() Rect {
 // palette over a Separation or DeviceN space decodes in its printed colour,
 // through the space's tint transform. DCTDecode decodes through
 // image/jpeg, including CMYK data without the Adobe marker image/jpeg
-// expects; CCITTFaxDecode and JBIG2Decode (generic,
-// symbol and text regions with arithmetic coding) decode natively to
-// one-bit grey. Other colour spaces, JPXDecode, and JBIG2 features outside
-// that subset return an error wrapping errors.ErrUnsupported. An image
+// expects. JPXDecode (JPEG 2000) decodes natively at 8 bits per sample,
+// in the dictionary's colour space when it names one and otherwise the
+// file's own, opacity channels dropped. CCITTFaxDecode and JBIG2Decode
+// (generic, symbol and text regions with arithmetic coding) decode
+// natively to one-bit grey. Other colour spaces, JBIG2 features outside
+// that subset, and JPEG 2000 beyond 16 bits per sample or with the Part 15
+// high-throughput coder return an error wrapping errors.ErrUnsupported. An image
 // with more than Limits.MaxImagePixels pixels returns ErrImageTooLarge
 // rather than allocating.
 //
@@ -149,6 +153,8 @@ func (im Image) Decode() (image.Image, error) {
 			return nil, fmt.Errorf("pdf: decode CCITTFaxDecode image: %w", err)
 		}
 		return im.decodeBilevel(bits, rows)
+	case "JPXDecode":
+		return im.decodeJPX()
 	case "JBIG2Decode":
 		bits, err := jbig2.Decode(im.Data, im.globals, im.Width, im.Height)
 		if err != nil {
@@ -209,6 +215,65 @@ func (im Image) decodeJPEG() (image.Image, error) {
 		}
 	}
 	return img, nil
+}
+
+// decodeJPX decodes JPEG 2000 data. The dictionary's colour space, when it
+// has one, governs the samples (ISO 32000-1 §8.9.5.2 note); otherwise the
+// file's own colour specification does. /Decode does not apply.
+func (im Image) decodeJPX() (image.Image, error) {
+	cfg, err := jpx.DecodeConfig(im.Data)
+	if err != nil {
+		return nil, fmt.Errorf("pdf: decode JPXDecode image: %w", err)
+	}
+	if limit := im.maxPixels; limit > 0 && cfg.Height > 0 && cfg.Width > limit/cfg.Height {
+		return nil, fmt.Errorf("%w: %d×%d", ErrImageTooLarge, cfg.Width, cfg.Height)
+	}
+	maxSamples := 0
+	if im.maxPixels > 0 {
+		maxSamples = im.maxPixels * min(max(cfg.Components, 1), 4)
+	}
+	img, err := jpx.Decode(im.Data, jpx.Options{MaxSamples: maxSamples, Indexed: im.palette != nil})
+	if err != nil {
+		return nil, fmt.Errorf("pdf: decode JPXDecode image: %w", err)
+	}
+	bi := im
+	bi.Width, bi.Height, bi.BitsPerComponent, bi.decode = img.Width, img.Height, 8, nil
+	channels := img.Channels
+	if bi.ColorSpace == "" || bi.Components == 0 {
+		bi.ColorSpace, bi.Components = jpxColorSpace(img.ColorSpace, len(channels)), len(channels)
+	}
+	if len(channels) < bi.Components {
+		return nil, fmt.Errorf("pdf: decode JPXDecode image: %d channels for a %d-component colour space", len(channels), bi.Components)
+	}
+	channels = channels[:bi.Components] // extra channels are opacity
+	n := bi.Components
+	data := make([]byte, img.Width*img.Height*n)
+	for c, ch := range channels {
+		for i, v := range ch {
+			data[i*n+c] = v
+		}
+	}
+	return bi.decodeSamples(data)
+}
+
+// jpxColorSpace names the device space for a JPEG 2000 file's own colour
+// specification, or guesses one from the channel count.
+func jpxColorSpace(cs jpx.ColorSpace, channels int) string {
+	switch cs {
+	case jpx.Gray:
+		return "DeviceGray"
+	case jpx.RGB:
+		return "DeviceRGB"
+	case jpx.CMYK:
+		return "DeviceCMYK"
+	}
+	switch channels {
+	case 1:
+		return "DeviceGray"
+	case 4:
+		return "DeviceCMYK"
+	}
+	return "DeviceRGB"
 }
 
 func invertBytes(b []byte) {
