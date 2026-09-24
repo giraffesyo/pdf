@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -448,7 +449,6 @@ func TestImageDecodeSamples(t *testing.T) {
 	t.Run("unsupported", func(t *testing.T) {
 		for name, dict := range map[string]string{
 			"lab": "/Width 1 /Height 1 /ColorSpace [/Lab << >>] /BitsPerComponent 8",
-			"jpx": "/Width 1 /Height 1 /Filter /JPXDecode",
 		} {
 			if err := decodeErr(t, dict, "\x00\x00\x00"); !errors.Is(err, errors.ErrUnsupported) {
 				t.Errorf("%s: err = %v", name, err)
@@ -946,4 +946,76 @@ func TestImageDecodePlainCMYKJPEG(t *testing.T) {
 	if got := img.(*image.CMYK).CMYKAt(13, 4); got.C < 250 || got.M < 250 || got.Y < 250 || got.K > 5 {
 		t.Errorf("right half = %v", got)
 	}
+}
+
+// TestImageDecodeJPX: JPEG 2000 images decode in the file's colour space,
+// or in the dictionary's when it names one, an Indexed one taking the
+// codestream's samples as palette indices.
+func TestImageDecodeJPX(t *testing.T) {
+	fixture := func(name string) string {
+		data, err := fs.ReadFile(os.DirFS("internal/codec/jpx/testdata"), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	decode := func(t *testing.T, dict, data string) image.Image {
+		t.Helper()
+		obj := pdftest.Stream("/Type /XObject /Subtype /Image /Width 41 /Height 29 /Filter /JPXDecode "+dict, data)
+		doc, err := extractOptions(t, imageDoc("/Im1 Do", obj), Options{IncludeImages: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		im := doc.Pages[0].Images[0]
+		if im.Filter != "JPXDecode" {
+			t.Fatalf("filter = %q", im.Filter)
+		}
+		img, err := im.Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return img
+	}
+	srcRGB, err := os.ReadFile("internal/codec/jpx/testdata/src.ppm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rgb := srcRGB[len(srcRGB)-41*29*3:]
+
+	t.Run("own colour space", func(t *testing.T) {
+		img := decode(t, "", fixture("rgb.jp2"))
+		c := img.(*image.RGBA).RGBAAt(5, 7)
+		i := 3 * (7*41 + 5)
+		if c != (color.RGBA{rgb[i], rgb[i+1], rgb[i+2], 255}) {
+			t.Errorf("pixel (5, 7) = %v", c)
+		}
+	})
+	t.Run("dictionary colour space", func(t *testing.T) {
+		img := decode(t, "/ColorSpace /DeviceGray /BitsPerComponent 8", fixture("gray.jp2"))
+		if _, ok := img.(*image.Gray); !ok {
+			t.Errorf("decoded %T", img)
+		}
+	})
+	t.Run("indexed", func(t *testing.T) {
+		// Every index maps to one colour: red.
+		lookup := strings.Repeat("ff0000", 256)
+		img := decode(t, "/ColorSpace [/Indexed /DeviceRGB 255 <"+lookup+">] /BitsPerComponent 8", fixture("gray.jp2"))
+		p, ok := img.(*image.Paletted)
+		if !ok {
+			t.Fatalf("decoded %T", img)
+		}
+		if got := color.RGBAModel.Convert(p.At(3, 3)).(color.RGBA); got != (color.RGBA{255, 0, 0, 255}) {
+			t.Errorf("pixel = %v", got)
+		}
+	})
+	t.Run("pixel limit", func(t *testing.T) {
+		obj := pdftest.Stream("/Type /XObject /Subtype /Image /Width 41 /Height 29 /Filter /JPXDecode", fixture("rgb.jp2"))
+		doc, err := extractOptions(t, imageDoc("/Im1 Do", obj), Options{IncludeImages: true, Limits: Limits{MaxImagePixels: 1000}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := doc.Pages[0].Images[0].Decode(); !errors.Is(err, ErrImageTooLarge) {
+			t.Errorf("err = %v", err)
+		}
+	})
 }

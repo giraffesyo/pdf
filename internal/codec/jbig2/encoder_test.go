@@ -17,6 +17,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+
+	"github.com/giraffesyo/pdf/internal/codec/mq"
 )
 
 // mqEncoder implements the Annex E encoder (software conventions).
@@ -83,9 +85,8 @@ func (e *mqEncoder) renorm() {
 
 // encode codes decision d in context cx (CODELPS / CODEMPS, Figures E.6, E.7).
 func (e *mqEncoder) encode(cx *mqCx, d uint32) {
-	q := &qeTable[cx.i]
-	qe := q.qe
-	if d == uint32(cx.mps) {
+	qe, nmps, nlps, sw := mq.Probability(cx.State)
+	if d == uint32(cx.MPS) {
 		e.a -= qe
 		if e.a&0x8000 == 0 {
 			if e.a < qe {
@@ -93,7 +94,7 @@ func (e *mqEncoder) encode(cx *mqCx, d uint32) {
 			} else {
 				e.c += qe
 			}
-			cx.i = q.nmps
+			cx.State = nmps
 			e.renorm()
 		} else {
 			e.c += qe
@@ -106,10 +107,10 @@ func (e *mqEncoder) encode(cx *mqCx, d uint32) {
 	} else {
 		e.a = qe
 	}
-	if q.sw == 1 {
-		cx.mps = 1 - cx.mps
+	if sw {
+		cx.MPS = 1 - cx.MPS
 	}
-	cx.i = q.nlps
+	cx.State = nlps
 	e.renorm()
 }
 

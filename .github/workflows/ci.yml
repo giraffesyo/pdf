@@ -69,6 +69,8 @@ jobs:
         run: go test -run '^$' -fuzz '^FuzzExtractImages$' -fuzztime 60s .
       - name: fuzz Calculator 30s
         run: go test -run '^$' -fuzz '^FuzzCalculator$' -fuzztime 30s ./internal/function
+      - name: fuzz JPEG 2000 60s
+        run: go test -run '^$' -fuzz '^FuzzDecode$' -fuzztime 60s ./internal/codec/jpx
 
   benchmarks:
     runs-on: ubuntu-latest
