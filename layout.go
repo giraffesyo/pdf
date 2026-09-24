@@ -337,6 +337,10 @@ func compareLayoutLines(a, b layoutLine) int {
 }
 
 func writeLayoutLine(b *strings.Builder, line layoutLine) {
+	if lineHasRightToLeft(line) {
+		writeBidiLine(b, line)
+		return
+	}
 	walkLayoutLine(line, func(text string) { b.WriteString(text) })
 }
 
