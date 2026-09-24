@@ -4,6 +4,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // layoutGlyph refers to a page glyph by pointer rather than copying it: a
@@ -23,12 +24,12 @@ type layoutLine struct {
 	first  int
 }
 
-func reconstructPositionText(page Page, columns bool) string {
+func reconstructPositionText(page Page, layout LayoutOptions) string {
 	if len(page.Glyphs) == 0 {
 		return ""
 	}
-	lines := buildLayoutLines(page.Glyphs)
-	if columns {
+	lines := buildLayoutLines(page.Glyphs, layout.KeepDuplicateGlyphs)
+	if layout.Mode == LayoutColumns {
 		lines = orderColumns(lines, page.CropBox)
 	} else {
 		slices.SortStableFunc(lines, compareLayoutLines)
@@ -44,7 +45,7 @@ func reconstructPositionText(page Page, columns bool) string {
 	return b.String()
 }
 
-func buildLayoutLines(glyphs []Glyph) []layoutLine {
+func buildLayoutLines(glyphs []Glyph, keepDuplicates bool) []layoutLine {
 	const (
 		directionBuckets = 72 // five-degree buckets; exact matching remains below
 		offsetCell       = 4.0
@@ -111,25 +112,192 @@ func buildLayoutLines(glyphs []Glyph) []layoutLine {
 		lines[best].glyphs = append(lines[best].glyphs, item)
 		prev = best
 	}
-	for i := range lines {
-		line := &lines[i]
-		if layoutLineSorted(line) {
-			continue // text drawn in reading order, the common case
-		}
-		slices.SortStableFunc(line.glyphs, func(a, b layoutGlyph) int {
-			ap := glyphProjection(*a.Glyph, line.dir, false)
-			bp := glyphProjection(*b.Glyph, line.dir, false)
-			switch {
-			case ap < bp:
-				return -1
-			case ap > bp:
-				return 1
-			default:
-				return a.index - b.index
+	for i, n := 0, len(lines); i < n; i++ {
+		if layoutLineSorted(&lines[i]) {
+			// Text drawn in reading order, the common case.
+			if !keepDuplicates {
+				lines[i].glyphs = dropDuplicateGlyphs(lines[i].glyphs, lines[i].dir)
 			}
-		})
+			continue
+		}
+		sortLineGlyphs(&lines[i])
+		if !keepDuplicates {
+			lines[i].glyphs = dropDuplicateGlyphs(lines[i].glyphs, lines[i].dir)
+		}
+		lines = append(lines, splitOverlaidRuns(&lines[i])...)
 	}
 	return lines
+}
+
+// sortLineGlyphs orders a line's glyphs along its direction, keeping
+// content order among glyphs at the same position.
+func sortLineGlyphs(line *layoutLine) {
+	slices.SortStableFunc(line.glyphs, func(a, b layoutGlyph) int {
+		ap := glyphProjection(*a.Glyph, line.dir, false)
+		bp := glyphProjection(*b.Glyph, line.dir, false)
+		switch {
+		case ap < bp:
+			return -1
+		case ap > bp:
+			return 1
+		default:
+			return a.index - b.index
+		}
+	})
+}
+
+// Duplicate tolerances, as fractions of the font size along and across the
+// baseline: poppler's dupMaxPriDelta and dupMaxSecDelta.
+const (
+	duplicateAlong  = 0.1
+	duplicateAcross = 0.2
+)
+
+// dropDuplicateGlyphs removes glyphs that repeat another on the line —
+// the same text at the same place and size — which is how fake bold,
+// drop shadows, and fill-then-stroke headings are painted. The glyphs are
+// in order along dir, so a duplicate is among the few before it. Of each
+// pair it keeps the one drawn first: the copies may sit a hundredth of a
+// point apart in either direction, and keeping one copy whole keeps its
+// run intact for splitOverlaidRuns. It filters in place.
+func dropDuplicateGlyphs(glyphs []layoutGlyph, dir Point) []layoutGlyph {
+	kept := glyphs[:0]
+	for _, g := range glyphs {
+		along := glyphProjection(*g.Glyph, dir, false)
+		tol := duplicateAlong * max(g.Size, 1)
+		duplicate := false
+		for j := len(kept) - 1; j >= 0; j-- {
+			k := kept[j]
+			if along-glyphProjection(*k.Glyph, dir, false) > tol {
+				break
+			}
+			if isDuplicateGlyph(k.Glyph, g.Glyph, dir) {
+				if g.index < k.index {
+					kept[j] = g
+				}
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			kept = append(kept, g)
+		}
+	}
+	return kept
+}
+
+func isDuplicateGlyph(a, b *Glyph, dir Point) bool {
+	if a.Text != b.Text || math.Abs(a.Size-b.Size) > duplicateAlong*max(a.Size, 1) {
+		return false
+	}
+	d := Point{X: b.X - a.X, Y: b.Y - a.Y}
+	normal := Point{X: -dir.Y, Y: dir.X}
+	size := max(a.Size, 1)
+	return math.Abs(dotPoint(d, dir)) <= duplicateAlong*size &&
+		math.Abs(dotPoint(d, normal)) <= duplicateAcross*size
+}
+
+// splitOverlaidRuns separates text painted over other text on the same
+// baseline — a stamp or overlay across a line, or two strings placed at
+// the same origin — which sorting glyph by glyph would interleave letter
+// by letter. The line's glyphs, sorted along its direction, are divided
+// into runs as the content stream drew them; a run that lays two or more
+// glyphs over text already placed moves to a line of its own, returned
+// for the caller to append. Single overlapping glyphs, such as accents
+// positioned over their letter, stay in place.
+func splitOverlaidRuns(line *layoutLine) []layoutLine {
+	if len(line.glyphs) < 4 {
+		return nil
+	}
+	byIndex := slices.Clone(line.glyphs)
+	slices.SortFunc(byIndex, func(a, b layoutGlyph) int { return a.index - b.index })
+
+	type run struct {
+		glyphs     []layoutGlyph
+		start, end float64
+	}
+	var runs []run
+	for i, g := range byIndex {
+		start := glyphProjection(*g.Glyph, line.dir, false)
+		end := glyphProjection(*g.Glyph, line.dir, true)
+		if i > 0 {
+			r := &runs[len(runs)-1]
+			// A run continues while the pen moves forward; kerning may
+			// step back a little.
+			if start >= r.end-0.3*max(g.Size, 1) {
+				r.glyphs = append(r.glyphs, g)
+				r.end = max(r.end, end)
+				continue
+			}
+		}
+		runs = append(runs, run{glyphs: []layoutGlyph{g}, start: start, end: end})
+	}
+	if len(runs) < 2 {
+		return nil
+	}
+	slices.SortStableFunc(runs, func(a, b run) int {
+		switch {
+		case a.start < b.start:
+			return -1
+		case a.start > b.start:
+			return 1
+		}
+		return 0
+	})
+
+	// Place each run on the first track whose placed runs it does not
+	// cover with two or more glyphs.
+	type track struct {
+		glyphs []layoutGlyph
+		ends   []float64 // per placed run: [start, end] pairs
+	}
+	overlaps := func(t *track, r run) bool {
+		for k := 0; k < len(t.ends); k += 2 {
+			covered := 0
+			for _, g := range r.glyphs {
+				start := glyphProjection(*g.Glyph, line.dir, false)
+				tol := 0.3 * max(g.Size, 1)
+				if start > t.ends[k]-tol && start < t.ends[k+1]-tol {
+					covered++
+				}
+			}
+			if covered >= 2 {
+				return true
+			}
+		}
+		return false
+	}
+	var tracks []track
+	for _, r := range runs {
+		placed := false
+		for t := range tracks {
+			if !overlaps(&tracks[t], r) {
+				tracks[t].glyphs = append(tracks[t].glyphs, r.glyphs...)
+				tracks[t].ends = append(tracks[t].ends, r.start, r.end)
+				placed = true
+				break
+			}
+		}
+		if !placed {
+			tracks = append(tracks, track{glyphs: r.glyphs, ends: []float64{r.start, r.end}})
+		}
+	}
+	if len(tracks) < 2 {
+		return nil
+	}
+	extra := make([]layoutLine, 0, len(tracks)-1)
+	for t := range tracks {
+		split := *line
+		split.glyphs = tracks[t].glyphs
+		split.first = slices.MinFunc(split.glyphs, func(a, b layoutGlyph) int { return a.index - b.index }).index
+		sortLineGlyphs(&split)
+		if t == 0 {
+			*line = split
+			continue
+		}
+		extra = append(extra, split)
+	}
+	return extra
 }
 
 // layoutLineSorted reports whether the line's glyphs, which are in index
@@ -169,24 +337,63 @@ func compareLayoutLines(a, b layoutLine) int {
 }
 
 func writeLayoutLine(b *strings.Builder, line layoutLine) {
-	endsSpace := false
+	walkLayoutLine(line, func(text string) { b.WriteString(text) })
+}
+
+// walkLayoutLine calls emit with the line's text in order: each glyph's
+// text, and a space wherever a gap between glyphs implies one. Whitespace
+// at either end of the line is dropped, and so is a space glyph lying
+// within a neighbouring glyph that it was not drawn next to — a stray from
+// a smaller line whose baseline falls within this one's tolerance, which
+// would otherwise split a word. A space drawn between its neighbours stays
+// even when kerning pulls them over it, as right-aligned page numbers do.
+func walkLayoutLine(line layoutLine, emit func(string)) {
+	pending := ""     // whitespace glyphs held until text follows them
+	pendingMid := 0.0 // midpoint of the last of them
+	pendingIndex := 0 // content index of the last of them
+	textEnd := 0.0    // prevEnd before them
+	prevIndex := 0    // content index of the last glyph written
+	wrote := false
 	prevEnd := 0.0
-	for i, glyph := range line.glyphs {
+	for _, glyph := range line.glyphs {
 		start := glyphProjection(*glyph.Glyph, line.dir, false)
-		if i > 0 {
-			gap := start - prevEnd
-			threshold := 0.17 * glyph.Size
-			if threshold <= 0 {
-				threshold = 1
+		end := glyphProjection(*glyph.Glyph, line.dir, true)
+		if strings.TrimSpace(glyph.Text) == "" {
+			mid := (start + end) / 2
+			if wrote && (prevEnd <= mid || glyph.index == prevIndex+1) {
+				if pending == "" {
+					textEnd = prevEnd
+				}
+				pending += glyph.Text
+				pendingMid, pendingIndex = mid, glyph.index
+				prevEnd = end
 			}
-			startsSpace := strings.HasPrefix(glyph.Text, " ")
-			if gap > threshold && !endsSpace && !startsSpace {
-				b.WriteByte(' ')
+			continue
+		}
+		if pending != "" && start < pendingMid && glyph.index != pendingIndex+1 {
+			pending, prevEnd = "", textEnd // the space lies within this glyph
+		}
+		if wrote {
+			switch {
+			case pending != "":
+				emit(pending)
+			case !strings.HasPrefix(glyph.Text, " "):
+				threshold := 0.17 * glyph.Size
+				if threshold <= 0 {
+					threshold = 1
+				}
+				if start-prevEnd > threshold {
+					emit(" ")
+				}
 			}
 		}
-		b.WriteString(glyph.Text)
-		endsSpace = strings.HasSuffix(glyph.Text, " ")
-		prevEnd = glyphProjection(*glyph.Glyph, line.dir, true)
+		text := strings.TrimRightFunc(glyph.Text, unicode.IsSpace)
+		emit(text)
+		pending = glyph.Text[len(text):]
+		pendingMid, pendingIndex = end, glyph.index
+		wrote = true
+		prevEnd = end
+		prevIndex = glyph.index
 	}
 }
 
