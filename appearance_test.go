@@ -99,6 +99,8 @@ func TestFieldValuesWithoutAppearances(t *testing.T) {
 	fields := []string{
 		"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Jane Doe) /DA (/Helv 0 Tf 0 g) " +
 			"/Rect [120 690 320 712] /AP << /N 9 0 R >> >>",
+		"<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 8192 /T (pin) /V (s3cret) /DA (/Helv 10 Tf 0 g) " +
+			"/Rect [300 690 400 712] >>",
 		"<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 131072 /T (size) /V (Large) /DA (/Helv 10 Tf 0 g) " +
 			"/Rect [120 640 220 660] >>",
 		"<< /Type /Annot /Subtype /Widget /FT /Ch /T (color) /Opt [(Red) [(g) (Green)]] /DA (/Helv 10 Tf 0 g) " +
@@ -106,13 +108,15 @@ func TestFieldValuesWithoutAppearances(t *testing.T) {
 		pdftest.Stream("/Subtype /Form /BBox [0 0 200 22] /Resources << /Font << /Helv 5 0 R >> >>",
 			"BT /Helv 10 Tf 2 6 Td (stale) Tj ET"),
 	}
+	// The stale appearance is now object 10: the password field took 7.
+	fields[0] = strings.Replace(fields[0], "/N 9 0 R", "/N 10 0 R", 1)
 	regenerate := annotatedDoc(fields...)
 	regenerate = bytes.Replace(regenerate, []byte("/AcroForm <<"), []byte("/AcroForm << /NeedAppearances true"), 1)
 	d, err := extractOptions(t, regenerate, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := d.Text(), "Name: Jane Doe\nLarge\nRed\nGreen"; got != want {
+	if got, want := d.Text(), "Name: Jane Doe ******\nLarge\nRed\nGreen"; got != want {
 		t.Errorf("regenerated text = %q, want %q", got, want)
 	}
 
@@ -121,7 +125,7 @@ func TestFieldValuesWithoutAppearances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := d.Text(), "Name: stale\nLarge\nRed\nGreen"; got != want {
+	if got, want := d.Text(), "Name: stale ******\nLarge\nRed\nGreen"; got != want {
 		t.Errorf("stored-appearance text = %q, want %q", got, want)
 	}
 }

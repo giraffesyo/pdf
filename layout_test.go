@@ -1,6 +1,9 @@
 package pdf
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // run lays out text as glyphs of a fixed advance from (x, y), in order.
 func run(text string, x, y, advance, size float64) []Glyph {
@@ -150,5 +153,31 @@ func TestLayoutWordGaps(t *testing.T) {
 	)
 	if got := (Page{Glyphs: kerned}).Text(); got != "doesn't work works" {
 		t.Errorf("kerned text = %q", got)
+	}
+}
+
+// TestOffPageText: a line drawn wholly outside the media box is on no
+// page and leaves the text, in every mode; a line that starts on the page
+// and runs past its edge stays whole; KeepOffPageText keeps everything,
+// and Glyphs reports everything either way.
+func TestOffPageText(t *testing.T) {
+	page := Page{
+		MediaBox: Rect{MaxX: 200, MaxY: 200},
+		Glyphs: concat(
+			run("on the page", 10, 150, 6, 10),
+			run("running past the edge", 150, 120, 6, 10),
+			run("above the page", 10, 400, 6, 10),
+			run("left of it", -300, 100, 6, 10),
+		),
+	}
+	want := "on the page\nrunning past the edge"
+	for _, mode := range []LayoutMode{LayoutPosition, LayoutContentOrder, LayoutColumns} {
+		if got := page.TextWithOptions(LayoutOptions{Mode: mode}); got != want {
+			t.Errorf("mode %d: text = %q, want %q", mode, got, want)
+		}
+	}
+	if got := page.TextWithOptions(LayoutOptions{KeepOffPageText: true}); !strings.Contains(got, "above the page") ||
+		!strings.Contains(got, "left of it") {
+		t.Errorf("KeepOffPageText text = %q", got)
 	}
 }

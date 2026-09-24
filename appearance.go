@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/giraffesyo/pdf/internal/object"
 )
@@ -126,6 +127,7 @@ func appearanceMatrix(appearance object.Value, rect Rect) (matrix, bool) {
 // Field flags (ISO 32000-1 §12.7.4) that change how a value is drawn.
 const (
 	fieldMultiline = 1 << 12
+	fieldPassword  = 1 << 13
 	fieldCombo     = 1 << 17
 )
 
@@ -144,6 +146,10 @@ func (w *walker) drawFieldValue(annot object.Value) bool {
 	switch object.Inherited(annot, "FT").Name() {
 	case "Tx":
 		value := objectText(object.Inherited(annot, "V"))
+		if flags&fieldPassword != 0 {
+			// A viewer masks a password field's value, as poppler does.
+			value = strings.Repeat("*", utf8.RuneCountInString(value))
+		}
 		if flags&fieldMultiline != 0 {
 			lines = strings.Split(strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(value), "\n")
 		} else {

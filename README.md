@@ -64,7 +64,10 @@ fill-then-stroke headings — is read once, as `pdftotext` and PDFBox read
 it; `LayoutOptions.KeepDuplicateGlyphs` keeps the repeats, and
 `Page.Glyphs` reports every painted glyph either way. Text drawn over
 other text on the same baseline, such as an overlay or stamp, comes out
-on a line of its own instead of interleaved letter by letter.
+on a line of its own instead of interleaved letter by letter. Text drawn wholly off the page — beyond the media box, as
+a Form XObject larger than its page draws it — is left out, as `pdftotext`
+and MuPDF leave it (`LayoutOptions.KeepOffPageText` keeps it); a line
+that merely runs past the edge stays whole.
 
 Permissive extraction retains recoverable output and records conditions that
 may have made it incomplete in `Document.Warnings` and `Page.Warnings`.
