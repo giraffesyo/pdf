@@ -479,8 +479,14 @@ func (f *fontInfo) appendDecoded(dst []decoded, raw []byte) []decoded {
 			cid := f.encoding.cid(key)
 			width := f.cidWidth(cid)
 			vm := f.verticalMetric(cid, width)
+			var text string
+			if f.encoding.unicodeForm != notUnicode && (f.toUni == nil || f.toUni.unicode[key] == "") {
+				text = string(f.encoding.unicodeText(key)) // the code is the text
+			} else {
+				text = f.mapComposite(key, cid)
+			}
 			dst = append(dst, decoded{
-				text:     f.mapComposite(key, cid),
+				text:     text,
 				width:    width,
 				space:    key.bytes == 1 && key.value == 32,
 				vertical: f.vertical,
