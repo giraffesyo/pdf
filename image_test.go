@@ -855,3 +855,95 @@ func TestPageImageCount(t *testing.T) {
 		}
 	})
 }
+
+// TestImageDecodeTintTransform: a palette over a spot colour decodes in the
+// colour the tint transform prints it as, not as grey.
+func TestImageDecodeTintTransform(t *testing.T) {
+	decode := func(t *testing.T, cs string, extra ...string) image.Image {
+		t.Helper()
+		obj := pdftest.Stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace "+cs, "\x00\x01")
+		doc, err := extractOptions(t, imageDoc("/Im1 Do", obj, extra...), Options{IncludeImages: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		img, err := doc.Pages[0].Images[0].Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return img
+	}
+	rgbAt := func(img image.Image, x int) color.RGBA {
+		return color.RGBAModel.Convert(img.At(x, 0)).(color.RGBA)
+	}
+
+	t.Run("separation, exponential", func(t *testing.T) {
+		// Tint 0 is white; full tint is (0, 128, 255).
+		img := decode(t, "[/Indexed [/Separation /Blue /DeviceRGB << /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 0.5 1] /N 1 >>] 1 <00 ff>]")
+		if got := rgbAt(img, 0); got != (color.RGBA{255, 255, 255, 255}) {
+			t.Errorf("tint 0 = %v", got)
+		}
+		if got := rgbAt(img, 1); got != (color.RGBA{0, 128, 255, 255}) {
+			t.Errorf("full tint = %v", got)
+		}
+	})
+	t.Run("devicen, calculator", func(t *testing.T) {
+		// Two colorants to CMYK: the first is cyan, the second black.
+		fn := pdftest.Stream("/FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1 0 1]", "{ exch 0 0 4 -1 roll }")
+		img := decode(t, "[/Indexed [/DeviceN [/Spot1 /Spot2] /DeviceCMYK 6 0 R] 1 <0000 ff80>]", fn)
+		c, ok := img.(*image.Paletted)
+		if !ok {
+			t.Fatalf("decoded %T", img)
+		}
+		if got := c.Palette[1]; got != (color.CMYK{C: 255, K: 128}) {
+			t.Errorf("entry 1 = %v, want cyan with half black", got)
+		}
+	})
+	t.Run("inline, named base", func(t *testing.T) {
+		content := "q 2 0 0 1 10 10 cm BI /W 2 /H 1 /BPC 8 /CS [/I /Spot 1 <00 ff>] ID \x00\x01 EI Q"
+		data := pdftest.Build(1,
+			pdftest.Catalog(2),
+			pdftest.Pages(3),
+			pdftest.Page(2, 4, "<< /ColorSpace << /Spot [/Separation /Blue /DeviceRGB << /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 0.5 1] /N 1 >>] >> >>"),
+			pdftest.Stream("", content),
+		)
+		doc, err := extractOptions(t, data, Options{IncludeImages: true})
+		if err != nil || len(doc.Pages[0].Images) != 1 {
+			t.Fatalf("images %+v err %v", doc.Pages[0].Images, err)
+		}
+		img, err := doc.Pages[0].Images[0].Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rgbAt(img, 1); got != (color.RGBA{0, 128, 255, 255}) {
+			t.Errorf("full tint = %v", got)
+		}
+	})
+	t.Run("unusable function keeps the tint as darkness", func(t *testing.T) {
+		img := decode(t, "[/Indexed [/Separation /Spot /DeviceRGB << /FunctionType 9 >>] 1 <00 ff>]")
+		if got := rgbAt(img, 1); got != (color.RGBA{0, 0, 0, 255}) {
+			t.Errorf("full tint = %v, want black", got)
+		}
+	})
+}
+
+// TestImageDecodePlainCMYKJPEG: a CMYK JPEG without an Adobe marker, as
+// Ghostscript writes them, decodes with its samples as plain ink.
+func TestImageDecodePlainCMYKJPEG(t *testing.T) {
+	data, err := os.ReadFile("internal/codec/dct/testdata/plain-cmyk.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := pdftest.Stream("/Type /XObject /Subtype /Image /Width 16 /Height 8 /BitsPerComponent 8 /ColorSpace /DeviceCMYK /Filter /DCTDecode", string(data))
+	doc, err := extractOptions(t, imageDoc("/Im1 Do", obj), Options{IncludeImages: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := doc.Pages[0].Images[0].Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The right half's stored samples are (255, 255, 255, 0): full C, M, Y.
+	if got := img.(*image.CMYK).CMYKAt(13, 4); got.C < 250 || got.M < 250 || got.Y < 250 || got.K > 5 {
+		t.Errorf("right half = %v", got)
+	}
+}

@@ -109,7 +109,9 @@ for _, im := range page.Images {
 
 `Decode` handles unpacked samples in the Device, Cal, ICCBased, Indexed
 and single-colorant Separation/DeviceN spaces and image masks at 1–16 bits
-per component, DCTDecode through `image/jpeg`, and — natively, from the
+per component (palettes over spot colours in their printed colour, through
+the PDF tint-transform functions), DCTDecode through `image/jpeg` (CMYK
+with or without an Adobe marker), and — natively, from the
 ITU-T specifications — CCITT Group 3/4 fax and JBIG2 (generic, symbol and
 text regions with arithmetic coding, which is what scanner pipelines
 emit). JPXDecode and the rarer JBIG2 features (Huffman tables,
