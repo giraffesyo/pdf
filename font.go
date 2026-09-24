@@ -120,6 +120,8 @@ func loadFont(
 	var f *fontInfo
 	if fv.Kind() == object.Dict {
 		f = newFontInfo(fv, resolver, streamLimit)
+	} else {
+		f = formDefaultFont(name)
 	}
 	names[name] = f
 	if indirect && shared != nil {
@@ -320,6 +322,30 @@ func type3FontMatrix(fv object.Value) matrix {
 		}
 	}
 	return fm
+}
+
+// formDefaultFont stands in for a font an interactive form names but does
+// not supply. Form fields' appearances conventionally name ZapfDingbats
+// /ZaDb — the check marks and bullets of checkboxes and radio buttons —
+// and Helvetica /Helv, in the form's default resources (ISO 32000-1
+// §12.7.3.3); some forms leave them out, and viewers use the standard
+// fonts regardless. Any other missing name has no font.
+func formDefaultFont(name string) *fontInfo {
+	var enc string
+	switch name {
+	case "ZaDb":
+		enc = "ZapfDingbatsEncoding"
+	case "Helv":
+		enc = "WinAnsiEncoding"
+	default:
+		return nil
+	}
+	return &fontInfo{
+		defWidth:      500,
+		defVertical:   verticalMetric{w1: -1000, vy: 880},
+		fallback:      encoding.New(enc, nil),
+		fallbackFirst: true,
+	}
 }
 
 // intOr returns the value's integer, or d for non-integers.
