@@ -23,7 +23,10 @@ glyphs := page.Glyphs          // text, origin, advance, direction, size; Baseli
 `Page.Text` reconstructs reading order from direction-aware glyph baselines,
 and word boundaries are recovered from glyph gaps and font metrics — so PDFs
 that encode no space characters at all still come out readable. Rotated and
-vertical runs retain their reading direction. `Page.TextIn` and
+vertical runs retain their reading direction. Arabic and Hebrew, which PDFs
+paint in visual order, read back in logical order, with numbers and
+embedded left-to-right words in place (the Unicode Bidirectional
+Algorithm's reordering, applied in reverse). `Page.TextIn` and
 `Page.GlyphsIn` extract a rectangular region.
 
 ## Extraction options and diagnostics
