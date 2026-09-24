@@ -525,17 +525,16 @@ func extractPagesConcurrently(
 		go func() {
 			defer wg.Done()
 			// The clone shares the immutable cross-reference data and
-			// decryption key. Re-rooting each page node in it by object
-			// number keeps every value this worker touches — and so every
-			// cache it fills — its own.
+			// decryption key. Re-rooting each page node in it keeps every
+			// value this worker touches — and so every cache it fills —
+			// its own.
 			own := reader.Clone()
 			state := newPageState()
 			for i := range next {
 				pageNumber := numbers[i]
-				node := pageNodes[pageNumber-1]
-				if num, ok := node.ObjectNumber(); ok {
-					node = own.Object(num)
-				}
+				// A page given inline, with no object number, keeps its
+				// parsed dictionary but resolves through the clone too.
+				node := pageNodes[pageNumber-1].In(own)
 				slots[i].out = worker.extract(state, node, pageNumber)
 				close(slots[i].done)
 			}

@@ -83,6 +83,29 @@ type Value struct {
 	owner ref // object this value was parsed from, for decryption context
 }
 
+// In returns v as a value of r, a clone of the Reader v belongs to:
+// references in it, and in anything reached through it, resolve through
+// r and fill r's caches. A parsed value is not modified after parsing, so
+// a direct value — a page dictionary inline in a /Kids array, which has
+// no object number to look up again — can be shared between readers
+// used from different goroutines.
+func (v Value) In(r *Reader) Value {
+	v.r = r
+	return v
+}
+
+// Detached returns v rooted in a fresh clone of its Reader, which no
+// other goroutine uses. Cloning reads only a Reader's immutable state, so
+// Detached may be called from any goroutine: work done on behalf of
+// several — parsing a shared font's program on first use — cannot touch a
+// Reader another goroutine is using.
+func (v Value) Detached() Value {
+	if v.r == nil {
+		return v
+	}
+	return v.In(v.r.Clone())
+}
+
 // Trailer returns the trailer of the file v belongs to, resolved through
 // the same Reader as v — a clone's value reaches the clone's trailer.
 func (v Value) Trailer() Value {

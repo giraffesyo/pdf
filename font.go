@@ -33,6 +33,7 @@ type fontInfo struct {
 	// often the largest stream a font owns — is inflated and parsed on
 	// first need rather than when the font is loaded.
 	embeddedOnce sync.Once
+	embeddedDone atomic.Bool // set once the program has been parsed, publishing embeddedErr
 	loadEmbedded func() (map[uint32]string, error)
 	embedded     map[uint32]string
 	embeddedErr  error
@@ -175,7 +176,9 @@ func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontI
 			f.defVertical = parseDefaultVertical(desc.Key("DW2"))
 			f.cidVertical = parseCIDVertical(desc.Key("W2"))
 			f.loadEmbedded = func() (map[uint32]string, error) {
-				return embeddedCompositeFallback(desc, streamLimit)
+				// Any worker may be first to need the program; parse it
+				// through a reader of its own.
+				return embeddedCompositeFallback(desc.Detached(), streamLimit)
 			}
 		}
 		return f
@@ -211,7 +214,9 @@ func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontI
 	} else {
 		f.fallback, f.fallbackFirst = fallbackEncoding(fv, f.differences)
 		f.loadEmbedded = func() (map[uint32]string, error) {
-			return embeddedSimpleFallback(fv, streamLimit)
+			// Any worker may be first to need the program; parse it
+			// through a reader of its own.
+			return embeddedSimpleFallback(fv.Detached(), streamLimit)
 		}
 	}
 	f.firstChar = int(intOr(fv.Key("FirstChar"), 0))
@@ -619,13 +624,20 @@ func (f *fontInfo) embeddedText(code uint32) string {
 		if f.loadEmbedded != nil {
 			f.embedded, f.embeddedErr = f.loadEmbedded()
 		}
+		f.embeddedDone.Store(true)
 	})
 	return f.embedded[code]
 }
 
 // embeddedFailure returns the font program's parse error once it has been
-// attempted, for the walker to report at the point of use.
-func (f *fontInfo) embeddedFailure() error { return f.embeddedErr }
+// attempted, for the walker to report at the point of use. Another page's
+// worker may be parsing it still; until it is done there is none.
+func (f *fontInfo) embeddedFailure() error {
+	if !f.embeddedDone.Load() {
+		return nil
+	}
+	return f.embeddedErr
+}
 
 func (f *fontInfo) verticalMetric(cid uint32, width float64) verticalMetric {
 	vm, ok := f.cidVertical[cid]
