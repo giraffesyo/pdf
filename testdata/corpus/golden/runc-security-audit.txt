@@ -1,7 +1,7 @@
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 Security-Review Report runc 11.-12.2019
 Cure53, Dr.-Ing. M. Heiderich, M. Wege, N. Hippert, J. Larsson,
 MSc. D. Weißer, MSc. N. Krein, MSc. F. Fäßler
@@ -33,13 +33,13 @@ RUN-01-001 Race-condition bypassing masked paths (High)
 Conclusions & Verdict
 Cure53, Berlin · 12/06/19                             1/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 Introduction
 “runc is a CLI tool for spawning and running containers according to the OCI
-specification.”  
+specification.”
 From https://github.com/opencontainers/runc
 This report describes the results of a security assessment and a review of the general
 security posture found on the runc software complex and its surroundings. The project
@@ -74,17 +74,17 @@ covered real-life issue, together with the relevant PoC and credit for the origi
 then documented. Cure53 additionally furnishes mitigation advice, so to ascertain that
 Cure53, Berlin · 12/06/19                             2/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 the runc team can address this hard-to-find and tricky problem. The report closes with a
 conclusion in which Cure53 summarizes this 2019 project and issues a verdict about the
 security premise of the investigated runc scope.
 Scope
 • runc v1.0.0-rc9
 ◦ runc codebase
-▪ https://github.com/opencontainers/runc/tree/master 
+▪ https://github.com/opencontainers/runc/tree/master
 ▪ Commit: 46def4cc4cb7bae86d8c80cedd43e96708218f0a
 ◦ runc project’s security posture and maturity levels
 Test Methodology
@@ -110,10 +110,10 @@ Later chapters in this report will dive into the details of the inspected items,
 these choices and presenting the results in the specific case of the runc software project.
 Cure53, Berlin · 12/06/19                             3/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 Phase 2: Manual code auditing
 For this component, Cure53 performed a Small-scale code review and attempted to
 identify security-relevant areas of the project’s codebase and inspect them for common
@@ -150,10 +150,10 @@ functionality and the depth of instructions available to the developer.
 with the general project solution domain.
 Cure53, Berlin · 12/06/19                             4/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 • Past vulnerability reports and postings were checked to see in which areas
 certain errors had previously emerged, also in assessing the likelihood of their
 reappearance.
@@ -191,10 +191,10 @@ The usage of unsafe is limited on runc to syscall functionality where unsafe poi
 absolutely required and implementation cannot be achieved otherwise. The unsafe
 Cure53, Berlin · 12/06/19                             5/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 constructs are solely used as pointers for return values from prctl() and similar low-level
 system calls.
 Though some vendor code containing dangerous-looking marshalling code (see
@@ -231,10 +231,10 @@ container and needs more information in order to escape the environment. There i
 reason why this information should be retrievable from a sealed container. Such
 Cure53, Berlin · 12/06/19                             6/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 information leaks can easily be prevented by blocking the respective syslog system call
 via seccomp and this is highly advised.
 The /proc filesystem is a special virtual filesystem included in Linux. It generally requires
@@ -272,10 +272,10 @@ control rather complex. The framework itself offers a subset of functionality th
 configured in order to limit access for running containers. The general access control
 Cure53, Berlin · 12/06/19                             7/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 model is shared between the hosts responsible for implementation and runc. By default,
 runc offers the possibility to run rootless containers as well as build tags, which control
 individual access for a given container.
@@ -316,10 +316,10 @@ containers. However, regression testing is missing, especially as regards assess
 1 https://github.com/sirupsen/logrus
 Cure53, Berlin · 12/06/19                             8/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 whether fixes for previously disclosed vulnerabilities remain valid. Despite requiring
 additional engineering effort, reifying that is highly recommended.
 Documentation
@@ -356,10 +356,10 @@ of that contact should be communicated appropriately.
 3 https://github.com/opencontainers/runc/blob/master/MAINTAINERS_GUIDE.md
 Cure53, Berlin · 12/06/19                             9/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 4
 Alongside security notes , runc offers the relevant contact’s email address
 (security@opencontainers.org). However, the document omits important details, such as
@@ -399,10 +399,10 @@ potential reward for efforts.
 4 https://github.com/opencontainers/org/tree/master/security
 Cure53, Berlin · 12/06/19                             10/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 The runc project does not have a bug bounty program at present, however this should
 not be strictly viewed in a negative way. This is because bug bounty programs require
 additional resources and management, which are not always a given for all projects.
@@ -433,10 +433,10 @@ unable to secure these. However, with future growth of the project and potential
 increased resources, bug bounty scheme should definitely be considered.
 Cure53, Berlin · 12/06/19                             11/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 Phase 2: Manual code auditing & pentesting
 This section comments on the code auditing coverage within areas of special interest
 and documents the steps undertaken during the second phase of the audit against the
@@ -482,10 +482,10 @@ paths, including some core library functionality.
 5 https://github.com/opencontainers/runc/issues/1700
 Cure53, Berlin · 12/06/19                             12/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 Mounting/Binding and Symlinks
 The code responsible for mounting volumes and binding filesystems was inspected,
 particularly in connection with symlinks and filename/path traversal/normalization.
@@ -524,10 +524,10 @@ security@opencontainers.org. The steps to reproduce the issue with podman can be
 7 https://github.com/opencontainers/runc/issues/2128
 Cure53, Berlin · 12/06/19                             13/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 found on the respective gist. Additional reproduction steps for runc are available by
 following the link.
 The attack requires a rootfs in container-2 where /proc is symlinked to a folder like
@@ -553,10 +553,10 @@ top of runc while mitigating such issues. This can be done, for example, by usin
 more restrictive configurations.
 Cure53, Berlin · 12/06/19                             14/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 Conclusions & Verdict
 This assessment of the runc complex generally concludes on a positive note. Cure53,
 represented in this assessment by a team of seven testers, can conclude that the project
@@ -594,10 +594,10 @@ textually. It is recommended to rethink the approach and possibly replace it wit
 filedescriptor-based solution to make it race-safe.
 Cure53, Berlin · 12/06/19                             15/16
 
-         Dr.-Ing. Mario Heiderich, Cure53
-         Bielefelder Str. 14 
-         D 10709 Berlin
-         cure53.de · mario@cure53.de 
+Dr.-Ing. Mario Heiderich, Cure53
+Bielefelder Str. 14
+D 10709 Berlin
+cure53.de · mario@cure53.de
 Drawing on the findings stemming from this 2019 CNCF-funded project, Cure53 can
 state that the runc project is mature and safe, even though improving some aspects
 would lead to a greater praise. Notably, runc is being used widely in the container- and

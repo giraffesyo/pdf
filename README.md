@@ -53,6 +53,13 @@ Ligature presentation forms (`ﬁ`, `ﬂ`, `ﬀ`, `ﬃ`, `ﬄ`, `ﬅ`, `ﬆ`) fo
 letter sequences by default, as `pdftotext` and pdf.js do, so extracted text
 stays searchable; set `PreserveLigatures: true` to keep the raw codepoints.
 
+Text painted twice at the same place — fake bold, drop shadows,
+fill-then-stroke headings — is read once, as `pdftotext` and PDFBox read
+it; `LayoutOptions.KeepDuplicateGlyphs` keeps the repeats, and
+`Page.Glyphs` reports every painted glyph either way. Text drawn over
+other text on the same baseline, such as an overlay or stamp, comes out
+on a line of its own instead of interleaved letter by letter.
+
 Permissive extraction retains recoverable output and records conditions that
 may have made it incomplete in `Document.Warnings` and `Page.Warnings`.
 Strict mode returns the partial document with a `*pdf.StrictError` at the first

@@ -153,6 +153,13 @@ const (
 // LayoutOptions controls plain-text reconstruction.
 type LayoutOptions struct {
 	Mode LayoutMode
+
+	// KeepDuplicateGlyphs keeps glyphs that repeat another on the same
+	// line: the same text painted at the same place and size, as fake
+	// bold, drop shadows, and fill-then-stroke headings are drawn. By
+	// default text reconstruction reads each such glyph once, as poppler
+	// and PDFBox do; Page.Glyphs reports every painted glyph either way.
+	KeepDuplicateGlyphs bool
 }
 
 // Point is a coordinate in unrotated PDF page space.

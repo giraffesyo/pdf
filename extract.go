@@ -634,26 +634,37 @@ func (p Page) Text() string {
 // selected during extraction.
 func (p Page) TextWithOptions(layout LayoutOptions) string {
 	if layout.Mode == LayoutContentOrder {
-		return p.contentOrderText()
+		return p.contentOrderText(layout.KeepDuplicateGlyphs)
 	}
-	return reconstructPositionText(p, layout.Mode == LayoutColumns)
+	return reconstructPositionText(p, layout)
 }
 
-func (p Page) contentOrderText() string {
+func (p Page) contentOrderText(keepDuplicates bool) string {
 	if len(p.Glyphs) == 0 {
 		return ""
 	}
+	// Duplicates are looked for among the glyphs drawn since the line
+	// began, as far back as a repainted heading reaches.
+	const duplicateWindow = 256
 	var b strings.Builder
 	prev := p.Glyphs[0]
 	b.WriteString(prev.Text)
 	endsSpace := strings.HasSuffix(prev.Text, " ")
-	for _, g := range p.Glyphs[1:] {
+	lineStart := 0
+	for i := 1; i < len(p.Glyphs); i++ {
+		g := p.Glyphs[i]
 		lineTol := 0.55 * max(g.Size, prev.Size)
 		if lineTol <= 0 {
 			lineTol = 5
 		}
+		newLine := math.Abs(g.Y-prev.Y) > lineTol
+		if newLine {
+			lineStart = i
+		} else if !keepDuplicates && repeatsRecentGlyph(p.Glyphs[max(lineStart, i-duplicateWindow):i], &p.Glyphs[i]) {
+			continue
+		}
 		switch {
-		case math.Abs(g.Y-prev.Y) > lineTol:
+		case newLine:
 			b.WriteByte('\n')
 		case g.X-(prev.X+prev.Advance) > 0.17*max(g.Size, 1):
 			if !endsSpace && !strings.HasPrefix(g.Text, " ") {
@@ -665,6 +676,17 @@ func (p Page) contentOrderText() string {
 		prev = g
 	}
 	return b.String()
+}
+
+// repeatsRecentGlyph reports whether g duplicates one of recent.
+func repeatsRecentGlyph(recent []Glyph, g *Glyph) bool {
+	dir := g.direction()
+	for i := len(recent) - 1; i >= 0; i-- {
+		if isDuplicateGlyph(&recent[i], g, dir) {
+			return true
+		}
+	}
+	return false
 }
 
 func listPages(r *object.Reader) ([]object.Value, error) {
