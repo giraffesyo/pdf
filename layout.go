@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // layoutGlyph refers to a page glyph by pointer rather than copying it: a
@@ -452,6 +453,7 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 	pendingIndex := 0 // content index of the last of them
 	textEnd := 0.0    // prevEnd before them
 	prevIndex := 0    // content index of the last glyph written
+	prevText := ""    // its text
 	wrote := false
 	prevEnd := 0.0
 	for _, glyph := range line.glyphs {
@@ -477,7 +479,11 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 			case pending != "":
 				emit(pending)
 			case !strings.HasPrefix(glyph.Text, " "):
-				if start-prevEnd > wordGap(glyph.Size) {
+				gap := wordGap(glyph.Size)
+				if unspacedScript(prevText) && unspacedScript(glyph.Text) {
+					gap = unspacedGap(glyph.Size)
+				}
+				if start-prevEnd > gap {
 					emit(" ")
 				}
 			}
@@ -489,6 +495,7 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 		wrote = true
 		prevEnd = end
 		prevIndex = glyph.index
+		prevText = text
 	}
 }
 
@@ -498,6 +505,27 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 // files, 0.1 agrees best, and adapting it to a line's letter spacing did
 // worse.
 const minWordGapEm = 0.1
+
+// unspacedGap is the gap between two characters of scripts written
+// without spaces between words — Chinese and Japanese — that separates
+// them: a full em, a layout gap such as a table's. Justified or
+// letter-spaced Japanese sets its characters a quarter em apart, which is
+// no word break.
+func unspacedGap(size float64) float64 { return max(size, 1) }
+
+// unspacedScript reports whether text is a character of a script written
+// without spaces between words: Han, Hiragana, Katakana, CJK punctuation,
+// and full-width forms. Hangul is written with spaces and is not one.
+func unspacedScript(text string) bool {
+	r, _ := utf8.DecodeRuneInString(text)
+	switch {
+	case r >= 0x3000 && r <= 0x30FF, // CJK punctuation, Hiragana, Katakana
+		r >= 0xFF00 && r <= 0xFFEF, // full-width and half-width forms
+		r >= 0x31F0 && r <= 0x31FF: // Katakana phonetic extensions
+		return true
+	}
+	return unicode.Is(unicode.Han, r)
+}
 
 func wordGap(size float64) float64 {
 	if gap := minWordGapEm * size; gap > 0 {

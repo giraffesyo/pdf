@@ -267,3 +267,30 @@ func glyphTexts(glyphs []Glyph) []string {
 	}
 	return texts
 }
+
+// TestLayoutUnspacedScripts: Chinese and Japanese are written without
+// spaces between words, so justified or letter-spaced text — characters a
+// quarter em apart — reads unbroken; a gap of a full em, a table's, still
+// separates. Korean is written with spaces and keeps them.
+func TestLayoutUnspacedScripts(t *testing.T) {
+	spaced := func(text string, x, gap float64) []Glyph {
+		var glyphs []Glyph
+		for _, r := range text {
+			glyphs = append(glyphs, Glyph{Text: string(r), X: x, Y: 100, Advance: 10, Size: 10})
+			x += 10 + gap
+		}
+		return glyphs
+	}
+	page := Page{Glyphs: spaced("保護者の皆様へ", 10, 2.5)} // a quarter em apart
+	if got := page.Text(); got != "保護者の皆様へ" {
+		t.Errorf("letter-spaced Japanese = %q", got)
+	}
+	page = Page{Glyphs: concat(spaced("東京", 10, 0), spaced("大阪", 45, 0))} // 15 apart: a cell's gap
+	if got := page.Text(); got != "東京 大阪" {
+		t.Errorf("table cells = %q", got)
+	}
+	page = Page{Glyphs: concat(spaced("한국", 10, 0), spaced("어", 33, 0))} // a word space in Korean
+	if got := page.Text(); got != "한국 어" {
+		t.Errorf("Korean = %q", got)
+	}
+}
