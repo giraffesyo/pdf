@@ -221,6 +221,7 @@ func (w *walker) drawFieldValue(annot object.Value) bool {
 			}
 			lines = append(lines, objectText(option))
 		}
+		lines = lines[listTop(annot, options, len(lines)):]
 	default:
 		return false
 	}
@@ -274,6 +275,47 @@ func (w *walker) drawFieldValue(annot object.Value) bool {
 		}
 	}
 	return true
+}
+
+// listTop is the first option a list box shows: its top index, /TI,
+// where it has been scrolled; failing that, the topmost selected option
+// when the box would otherwise hide it, as viewers scroll to show the
+// selection; the first option otherwise.
+func listTop(annot, options object.Value, n int) int {
+	if ti, ok := object.Inherited(annot, "TI").Int64(); ok && ti > 0 && ti < int64(n) {
+		return int(ti)
+	}
+	selected := map[string]bool{}
+	value := object.Inherited(annot, "V")
+	if value.Kind() == object.Array {
+		for i := range value.Len() {
+			selected[objectText(value.Index(i))] = true
+		}
+	} else if v := objectText(value); v != "" {
+		selected[v] = true
+	}
+	if len(selected) == 0 {
+		return 0
+	}
+	rect := rectFromValue(annot.Key("Rect"))
+	size := fieldFontSize(objectText(object.Inherited(annot, "DA")))
+	if size <= 0 {
+		size = 12
+	}
+	visible := max(1, int((rect.MaxY-rect.MinY-2)/(size*1.15)))
+	for i := range n {
+		option := options.Index(i)
+		if option.Kind() == object.Array { // [export display]
+			option = option.Index(0)
+		}
+		if selected[objectText(option)] {
+			if i >= visible {
+				return i
+			}
+			return 0
+		}
+	}
+	return 0
 }
 
 // fieldFontSize returns the font size a field's default appearance string
