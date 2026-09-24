@@ -187,3 +187,22 @@ func TestFilteredStream(t *testing.T) {
 		t.Errorf("flate content = %q", got)
 	}
 }
+
+// TestDictSkipsStrayTokens: a dictionary with stray tokens where a key
+// belongs — "/X 1 0 R 0 R" — keeps the keys after them.
+func TestDictSkipsStrayTokens(t *testing.T) {
+	doc := pdftest.Build(1,
+		"<< /X 1 0 R 0 R [ /Junk ] /Pages 2 0 R /Type /Catalog >>",
+		pdftest.Pages(3),
+		pdftest.Page(2, 4, "<< >>"),
+		pdftest.Stream("", "x"),
+	)
+	r := open(t, doc)
+	root := r.Trailer().Key("Root")
+	if root.Key("Type").Name() != "Catalog" || root.Key("Pages").Key("Type").Name() != "Pages" {
+		t.Errorf("catalog keys after stray tokens lost: %v", root.Keys())
+	}
+	if root.Key("Junk").Kind() != Null {
+		t.Error("a name inside a stray array became a key")
+	}
+}

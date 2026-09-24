@@ -186,6 +186,20 @@ func extractDocument(
 		return nil, err
 	}
 	pageNodes, err := listPages(reader)
+	var repaired error // why the cross-reference table was rebuilt
+	if err != nil || len(pageNodes) == 0 {
+		// A table can parse cleanly yet point at the wrong objects; rebuild
+		// it from the objects in the file, as poppler does, before giving up.
+		if reader.Repair() == nil {
+			if nodes, retryErr := listPages(reader); retryErr == nil && len(nodes) > 0 {
+				repaired = err
+				if repaired == nil {
+					repaired = errors.New("pdf: no pages")
+				}
+				pageNodes, err = nodes, nil
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -209,6 +223,12 @@ func extractDocument(
 			return &StrictError{Warning: warning}
 		}
 		return nil
+	}
+	if repaired != nil {
+		if err := addDocumentWarning(WarningMalformedDocument,
+			fmt.Errorf("pdf: cross-reference table rebuilt from object headers: %w", repaired)); err != nil {
+			return doc, err
+		}
 	}
 	if opts.IncludeMetadata {
 		doc.Metadata, err = extractMetadata(reader, limits.MaxStreamBytes)
@@ -686,7 +706,16 @@ func listPages(r *object.Reader) ([]object.Value, error) {
 		if nodes++; nodes > maxNodes {
 			return errors.New("pdf: page tree too large")
 		}
-		switch v.Key("Type").Name() {
+		kind := v.Key("Type").Name()
+		if kind != "Pages" && kind != "Page" && v.Kind() == object.Dict {
+			// A node missing its /Type is read by its shape, as poppler
+			// reads it: an intermediate node has /Kids, a page does not.
+			kind = "Page"
+			if v.Key("Kids").Kind() == object.Array {
+				kind = "Pages"
+			}
+		}
+		switch kind {
 		case "Pages":
 			kids := v.Key("Kids")
 			for i := range kids.Len() {
