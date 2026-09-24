@@ -286,9 +286,11 @@ concurrently, since OCR dominates the cost of a scanned document — so set
 
 ## Regression corpus
 
-`testdata/corpus/` holds real documents — LaTeX, Word, and scanning-pipeline
-output with embedded Type1, TrueType, and CFF fonts over multiple pages —
-under redistributable licenses (see `testdata/corpus/NOTICE.md`).
+`testdata/corpus/` holds real documents — LaTeX, Word, Acrobat PDFMaker,
+InDesign, LiveCycle forms, Chrome, macOS Quartz, Ghostscript, and
+scanning-pipeline output, with embedded Type1, TrueType, and CFF fonts
+and right-to-left text — under redistributable licenses (see
+`testdata/corpus/NOTICE.md`).
 `TestCorpusGolden` pins `Document.Text` for each file in
 `testdata/corpus/golden/`, so a decoding or layout change is a reviewable
 diff; accept an intentional change with
