@@ -946,6 +946,31 @@ func operandList(d map[string]operand, keys ...string) []operand {
 // inlineImageLength returns the byte length of an unfiltered inline
 // image's data, or -1 when it cannot be known from the dictionary alone
 // (filtered data, or a colour space named in the resources).
+// inlineASCIITerminator returns the end-of-data marker of an inline
+// image whose first filter is ASCII85 ("~>") or ASCIIHex (">"), whose
+// data cannot contain it: the data ends there exactly, however much the
+// encoded text happens to look like an EI marker.
+func inlineASCIITerminator(d map[string]operand) string {
+	f, ok := operandKey(d, "F", "Filter")
+	if !ok {
+		return ""
+	}
+	name := f.name
+	if f.kind == opArr {
+		if len(f.arr) == 0 || f.arr[0].kind != opName {
+			return ""
+		}
+		name = f.arr[0].name
+	}
+	switch name {
+	case "A85", "ASCII85Decode":
+		return "~>"
+	case "AHx", "ASCIIHexDecode":
+		return ">"
+	}
+	return ""
+}
+
 func inlineImageLength(d map[string]operand) int {
 	if _, filtered := operandKey(d, "F", "Filter"); filtered {
 		return -1

@@ -50,12 +50,12 @@ func TestWordSpacingOp(t *testing.T) {
 	if len(glyphs) != 3 {
 		t.Fatalf("glyphs = %d, want 3", len(glyphs))
 	}
-	// Space glyph advance = width(500)/1000*10 + Tw(5) = 10.
-	if adv := glyphs[1].Advance; adv < 9.9 || adv > 10.1 {
-		t.Errorf("space advance = %v, want ~10", adv)
+	// Space glyph advance = Helvetica's space, 278/1000*10, + Tw(5) = 7.78.
+	if adv := glyphs[1].Advance; adv < 7.77 || adv > 7.79 {
+		t.Errorf("space advance = %v, want ~7.78", adv)
 	}
-	if got := glyphs[2].X - glyphs[1].X; got < 9.9 || got > 10.1 {
-		t.Errorf("b.X - space.X = %v, want ~10", got)
+	if got := glyphs[2].X - glyphs[1].X; got < 7.77 || got > 7.79 {
+		t.Errorf("b.X - space.X = %v, want ~7.78", got)
 	}
 }
 
@@ -65,9 +65,9 @@ func TestCharSpacingOp(t *testing.T) {
 	if len(glyphs) != 2 {
 		t.Fatalf("glyphs = %d, want 2", len(glyphs))
 	}
-	// advance = 500/1000*10 + Tc(2) = 7.
-	if adv := glyphs[0].Advance; adv < 6.9 || adv > 7.1 {
-		t.Errorf("advance = %v, want ~7", adv)
+	// advance = Helvetica's a, 556/1000*10, + Tc(2) = 7.56.
+	if adv := glyphs[0].Advance; adv < 7.55 || adv > 7.57 {
+		t.Errorf("advance = %v, want ~7.56", adv)
 	}
 }
 
@@ -77,9 +77,9 @@ func TestHorizontalScalingOp(t *testing.T) {
 	if len(glyphs) != 2 {
 		t.Fatalf("glyphs = %d, want 2", len(glyphs))
 	}
-	// advance doubles: 500/1000*10*2 = 10.
-	if adv := glyphs[0].Advance; adv < 9.9 || adv > 10.1 {
-		t.Errorf("advance = %v, want ~10", adv)
+	// advance doubles: Helvetica's a, 556/1000*10*2 = 11.12.
+	if adv := glyphs[0].Advance; adv < 11.11 || adv > 11.13 {
+		t.Errorf("advance = %v, want ~11.12", adv)
 	}
 }
 

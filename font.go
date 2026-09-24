@@ -11,6 +11,7 @@ import (
 	"github.com/giraffesyo/pdf/internal/cjk"
 	"github.com/giraffesyo/pdf/internal/encoding"
 	"github.com/giraffesyo/pdf/internal/object"
+	"github.com/giraffesyo/pdf/internal/stdfont"
 )
 
 // fontInfo wraps one font dictionary with decode and width lookups.
@@ -47,10 +48,15 @@ type fontInfo struct {
 	simpleText [256]atomic.Pointer[string]
 
 	firstChar int
-	widths    []float64          // simple fonts: indexed by code-firstChar, in 1/1000 text space
-	emScale   float64            // a Type3 font's em in units of the font size; 0 means 1
-	cidWidths map[uint32]float64 // composite fonts
-	defWidth  float64
+	widths    []float64 // simple fonts: indexed by code-firstChar, in 1/1000 text space
+	// stdMetrics are the built-in widths of the standard font — or its
+	// metric-compatible namesake — that a simple font names, for codes its
+	// /Widths does not cover.
+	stdMetrics stdfont.Font
+	standard   bool
+	emScale    float64            // a Type3 font's em in units of the font size; 0 means 1
+	cidWidths  map[uint32]float64 // composite fonts
+	defWidth   float64
 
 	// collection names the Adobe CJK collection — Japan1, GB1, CNS1,
 	// Korea1, KR — whose table reads CIDs nothing else maps.
@@ -186,6 +192,7 @@ func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontI
 
 	// Simple font: /FirstChar + /Widths, standard encoding as fallback.
 	f.differences = parseDifferences(fv.Key("Encoding").Key("Differences"))
+	f.differences = codedGlyphNames(fv.Key("Encoding").Key("Differences"), f.differences)
 	widthScale := 1.0
 	if fv.Key("Subtype").Name() == "Type3" {
 		// A Type3 font's widths are in its own glyph space, mapped to text
@@ -230,8 +237,100 @@ func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontI
 	if mw, ok := fv.Key("FontDescriptor").Key("MissingWidth").Float64(); ok {
 		f.defWidth = mw * widthScale
 	}
+	if f.widths == nil && widthScale == 1 {
+		f.stdMetrics, f.standard = stdfont.Lookup(fv.Key("BaseFont").Name())
+	}
 	return f
 }
+
+// codedGlyphNames fills in text for glyph names that spell a character
+// code, as two generators write them for fonts they re-encode: Windows'
+// PostScript driver names its converted TrueType glyphs /G41 — the code in
+// hex — and others, such as Advent 3B2, /C65 — the code in decimal. Codes
+// read as ASCII, and above it as WinAnsi, the Windows encoding both come
+// from. A font qualifies only on evidence: of its names in one of those
+// forms that the Adobe Glyph List does not know, at least three, and four
+// in five, must spell a printable character, so a font that merely
+// numbers its glyphs carries no text.
+func codedGlyphNames(arr object.Value, differences map[byte]string) map[byte]string {
+	if arr.Kind() != object.Array {
+		return differences
+	}
+	type coded struct {
+		code byte
+		text string
+	}
+	var found []coded
+	total := 0
+	code := -1
+	for i := range arr.Len() {
+		el := arr.Index(i)
+		switch el.Kind() {
+		case object.Integer:
+			n, _ := el.Int64()
+			code = int(n)
+		case object.Name:
+			if code >= 0 && code <= 0xFF && differences[byte(code)] == "" {
+				if text, ok := codedGlyphText(el.Name()); ok {
+					total++
+					if text != "" {
+						found = append(found, coded{byte(code), text})
+					}
+				}
+			}
+			code++
+		}
+	}
+	if len(found) < 3 || 5*len(found) < 4*total {
+		return differences
+	}
+	if differences == nil {
+		differences = map[byte]string{}
+	}
+	for _, c := range found {
+		differences[c.code] = c.text
+	}
+	return differences
+}
+
+// codedGlyphText reads a /G-hex or /C-decimal glyph name, allowing a
+// variant suffix after a dot (/C40._). It reports whether the name has
+// such a form, and its character, empty if not printable.
+func codedGlyphText(name string) (string, bool) {
+	name, _, _ = strings.Cut(name, ".")
+	if len(name) < 3 {
+		return "", false
+	}
+	var n uint64
+	var err error
+	switch name[0] {
+	case 'G':
+		if len(name) != 3 {
+			return "", false
+		}
+		n, err = strconv.ParseUint(name[1:], 16, 8)
+	case 'C':
+		if len(name) > 4 {
+			return "", false
+		}
+		n, err = strconv.ParseUint(name[1:], 10, 8)
+	default:
+		return "", false
+	}
+	if err != nil {
+		return "", false
+	}
+	if n < 0x20 {
+		return "", true
+	}
+	text := winAnsi.Decode(byte(n))
+	if sanitizeText(text, false) == "" {
+		return "", true
+	}
+	return text, true
+}
+
+var winAnsi = encoding.New("WinAnsiEncoding", nil)
 
 // numberedGlyphNames fills in text for glyph names that number their own
 // code as dvips names them — /a97 for the glyph at code 97 — in the Type3
@@ -243,7 +342,7 @@ func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontI
 // with ASCII count, not the positions where they place quotes, dashes,
 // and accents.
 func numberedGlyphNames(arr object.Value, differences map[byte]string) map[byte]string {
-	if arr.Kind() != object.Array {
+	if arr.Kind() != object.Array || sequentialGlyphNames(arr) {
 		return differences
 	}
 	code := -1
@@ -266,6 +365,35 @@ func numberedGlyphNames(arr object.Value, differences map[byte]string) map[byte]
 		}
 	}
 	return differences
+}
+
+// sequentialGlyphNames reports whether a font numbers its glyphs in the
+// order it assigned them codes, as Ghostscript names its bitmap fonts'
+// glyphs /a0, /a1, … from code 0: every code below the space holds a
+// numbered glyph. dvips lists only the characters a document uses, which
+// never fill all of them.
+func sequentialGlyphNames(arr object.Value) bool {
+	var control [0x20]bool
+	code := -1
+	for i := range arr.Len() {
+		el := arr.Index(i)
+		switch el.Kind() {
+		case object.Integer:
+			n, _ := el.Int64()
+			code = int(n)
+		case object.Name:
+			if code >= 0 && code < 0x20 && el.Name() == "a"+strconv.Itoa(code) {
+				control[code] = true
+			}
+			code++
+		}
+	}
+	for _, numbered := range control {
+		if !numbered {
+			return false
+		}
+	}
+	return true
 }
 
 func numberedGlyphText(name string, code int) string {
@@ -707,6 +835,13 @@ func (f *fontInfo) simpleWidth(code int) float64 {
 	idx := code - f.firstChar
 	if idx >= 0 && idx < len(f.widths) && f.widths[idx] > 0 {
 		return f.widths[idx]
+	}
+	if f.standard && code >= 0 && code <= 0xff {
+		// A standard font the document gives no width for: the reader's
+		// built-in metrics, which PDF 1.4 and earlier relied on.
+		if w, ok := f.stdMetrics.Width(byte(code), f.mapSimple(uint32(code))); ok {
+			return w
+		}
 	}
 	return f.defWidth
 }

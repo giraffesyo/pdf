@@ -332,4 +332,6 @@ MIT. Embeds the [Adobe Glyph List](https://github.com/adobe-type-tools/agl-aglfn
 (Apache-2.0) for glyph-name decoding, and character tables for Adobe's
 Chinese, Japanese, and Korean collections derived from
 [cmap-resources](https://github.com/adobe-type-tools/cmap-resources)
-(BSD-3-Clause; see `internal/cjk/data/NOTICE`).
+(BSD-3-Clause; see `internal/cjk/data/NOTICE`), and the advance widths
+of the 14 standard fonts derived from Adobe's Core 14 AFM files (see
+`internal/stdfont/NOTICE` and `MustRead.html`).
