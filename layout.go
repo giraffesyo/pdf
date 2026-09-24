@@ -29,6 +29,11 @@ func reconstructPositionText(page Page, layout LayoutOptions) string {
 		return ""
 	}
 	lines := buildLayoutLines(page.Glyphs, layout.KeepDuplicateGlyphs)
+	if !layout.KeepOffPageText && pageBoxSet(page.MediaBox) {
+		lines = slices.DeleteFunc(lines, func(line layoutLine) bool {
+			return !lineOnPage(line, page.MediaBox)
+		})
+	}
 	lines = readingOrder(lines, layout.Mode == LayoutColumns)
 
 	var b strings.Builder
@@ -47,6 +52,20 @@ func reconstructPositionText(page Page, layout LayoutOptions) string {
 func lineHasText(line layoutLine) bool {
 	for _, g := range line.glyphs {
 		if strings.TrimSpace(g.Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// lineOnPage reports whether any of a line's glyphs reach onto the page.
+// Text wholly outside the media box — a form larger than the page,
+// content positioned off it — is on no page, and pdftotext and MuPDF do
+// not extract it; a line that starts on the page and runs past its edge
+// is kept whole.
+func lineOnPage(line layoutLine, box Rect) bool {
+	for _, g := range line.glyphs {
+		if rectsIntersect(glyphRect(*g.Glyph), box) {
 			return true
 		}
 	}

@@ -667,12 +667,21 @@ func (p Page) Text() string {
 // selected during extraction.
 func (p Page) TextWithOptions(layout LayoutOptions) string {
 	if layout.Mode == LayoutContentOrder {
-		return p.contentOrderText(layout.KeepDuplicateGlyphs)
+		return p.contentOrderText(layout)
 	}
 	return reconstructPositionText(p, layout)
 }
 
-func (p Page) contentOrderText(keepDuplicates bool) string {
+func (p Page) contentOrderText(layout LayoutOptions) string {
+	keepDuplicates := layout.KeepDuplicateGlyphs
+	offPage := func(g Glyph) bool {
+		return !layout.KeepOffPageText && pageBoxSet(p.MediaBox) && !rectsIntersect(glyphRect(g), p.MediaBox)
+	}
+	glyphs := p.Glyphs
+	for len(glyphs) > 0 && offPage(glyphs[0]) {
+		glyphs = glyphs[1:]
+	}
+	p.Glyphs = glyphs
 	if len(p.Glyphs) == 0 {
 		return ""
 	}
@@ -691,6 +700,9 @@ func (p Page) contentOrderText(keepDuplicates bool) string {
 			lineTol = 5
 		}
 		newLine := math.Abs(g.Y-prev.Y) > lineTol
+		if newLine && offPage(g) {
+			continue // off the page, and not continuing a line on it
+		}
 		if newLine {
 			lineStart = i
 		} else if !keepDuplicates && repeatsRecentGlyph(p.Glyphs[max(lineStart, i-duplicateWindow):i], &p.Glyphs[i]) {
@@ -710,6 +722,10 @@ func (p Page) contentOrderText(keepDuplicates bool) string {
 	}
 	return b.String()
 }
+
+// pageBoxSet reports whether a page box was given; synthetic pages may
+// have none.
+func pageBoxSet(r Rect) bool { return r.MaxX > r.MinX && r.MaxY > r.MinY }
 
 // repeatsRecentGlyph reports whether g duplicates one of recent.
 func repeatsRecentGlyph(recent []Glyph, g *Glyph) bool {

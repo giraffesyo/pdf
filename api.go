@@ -161,6 +161,12 @@ const (
 type LayoutOptions struct {
 	Mode LayoutMode
 
+	// KeepOffPageText keeps text drawn wholly outside the page's media
+	// box, which no viewer shows and pdftotext and MuPDF do not extract:
+	// a Form XObject larger than the page, content positioned off it.
+	// Page.Glyphs reports it either way.
+	KeepOffPageText bool
+
 	// KeepDuplicateGlyphs keeps glyphs that repeat another on the same
 	// line: the same text painted at the same place and size, as fake
 	// bold, drop shadows, and fill-then-stroke headings are drawn. By
