@@ -53,6 +53,12 @@ Ligature presentation forms (`ﬁ`, `ﬂ`, `ﬀ`, `ﬃ`, `ﬄ`, `ﬅ`, `ﬆ`) fo
 letter sequences by default, as `pdftotext` and pdf.js do, so extracted text
 stays searchable; set `PreserveLigatures: true` to keep the raw codepoints.
 
+Text that annotations paint over the page — filled form fields, free-text
+comments, stamps — is part of the page's text, as a viewer shows it and as
+`pdftotext` extracts it; text and choice fields are drawn from their values
+when the form asks viewers to regenerate appearances. Set
+`IgnoreAnnotationAppearances: true` for the page content alone.
+
 Permissive extraction retains recoverable output and records conditions that
 may have made it incomplete in `Document.Warnings` and `Page.Warnings`.
 Strict mode returns the partial document with a `*pdf.StrictError` at the first
