@@ -50,9 +50,10 @@ func TestWordSpacingOp(t *testing.T) {
 	if len(glyphs) != 3 {
 		t.Fatalf("glyphs = %d, want 3", len(glyphs))
 	}
-	// Space glyph advance = Helvetica's space, 278/1000*10, + Tw(5) = 7.78.
-	if adv := glyphs[1].Advance; adv < 7.77 || adv > 7.79 {
-		t.Errorf("space advance = %v, want ~7.78", adv)
+	// The space glyph is Helvetica's space, 278/1000*10 = 2.78 wide; Tw
+	// moves b on by 5 more, to 7.78.
+	if adv := glyphs[1].Advance; adv < 2.77 || adv > 2.79 {
+		t.Errorf("space advance = %v, want ~2.78", adv)
 	}
 	if got := glyphs[2].X - glyphs[1].X; got < 7.77 || got > 7.79 {
 		t.Errorf("b.X - space.X = %v, want ~7.78", got)
@@ -65,9 +66,12 @@ func TestCharSpacingOp(t *testing.T) {
 	if len(glyphs) != 2 {
 		t.Fatalf("glyphs = %d, want 2", len(glyphs))
 	}
-	// advance = Helvetica's a, 556/1000*10, + Tc(2) = 7.56.
-	if adv := glyphs[0].Advance; adv < 7.55 || adv > 7.57 {
-		t.Errorf("advance = %v, want ~7.56", adv)
+	// a is Helvetica's 556/1000*10 = 5.56 wide; Tc moves b on by 2 more.
+	if adv := glyphs[0].Advance; adv < 5.55 || adv > 5.57 {
+		t.Errorf("advance = %v, want ~5.56", adv)
+	}
+	if got := glyphs[1].X - glyphs[0].X; got < 7.55 || got > 7.57 {
+		t.Errorf("b.X - a.X = %v, want ~7.56", got)
 	}
 }
 
@@ -263,5 +267,15 @@ ET`)
 		"kerned segments need a space here."
 	if got != want {
 		t.Errorf("Text() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestNegativeCharSpacingKeepsWords: text set tight with negative Tc and
+// each glyph placed by Td draws every glyph at its full width; the
+// spacing only moves the pen, so no gap opens inside the word.
+func TestNegativeCharSpacingKeepsWords(t *testing.T) {
+	glyphs := extract(t, simpleDoc(`BT /F1 1 Tf -0.12 Tc 16 0 0 16 72 700 Tm (R) Tj 0.722 0 Td (e) Tj 0.556 0 Td (c) Tj ET`))
+	if got := lineText(glyphs); len(got) != 1 || got[0] != "Rec" {
+		t.Errorf("text = %q, want [Rec]", got)
 	}
 }
