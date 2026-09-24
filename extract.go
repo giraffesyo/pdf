@@ -186,6 +186,11 @@ func extractDocument(
 		return nil, err
 	}
 	pageNodes, err := listPages(reader)
+	var cycled error // a page-tree cycle skipped around the pages kept
+	var skipped *cycleWarning
+	if errors.As(err, &skipped) {
+		cycled, err = err, nil
+	}
 	var repaired error // why the cross-reference table was rebuilt
 	if err != nil || len(pageNodes) == 0 {
 		// A table can parse cleanly yet point at the wrong objects; rebuild
@@ -223,6 +228,11 @@ func extractDocument(
 			return &StrictError{Warning: warning}
 		}
 		return nil
+	}
+	if cycled != nil {
+		if err := addDocumentWarning(WarningMalformedDocument, cycled); err != nil {
+			return doc, err
+		}
 	}
 	if repaired != nil {
 		if err := addDocumentWarning(WarningMalformedDocument,
@@ -712,12 +722,19 @@ func repeatsRecentGlyph(recent []Glyph, g *Glyph) bool {
 	return false
 }
 
+// errPageTreeCycle reports intermediate page-tree nodes listed again
+// beneath themselves or elsewhere in the tree; the pages reachable around
+// them are kept.
+var errPageTreeCycle = errors.New("pdf: page tree lists a node more than once (a reference cycle)")
+
 func listPages(r *object.Reader) ([]object.Value, error) {
 	const (
 		maxDepth = 64
 		maxNodes = 50000
 	)
 	nodes := 0
+	visited := map[int]bool{} // intermediate nodes, by object number
+	cycle := false
 	hint := r.NumPages()
 	if hint < 0 || hint > maxNodes {
 		hint = 0
@@ -742,6 +759,13 @@ func listPages(r *object.Reader) ([]object.Value, error) {
 		}
 		switch kind {
 		case "Pages":
+			if num, ok := v.ObjectNumber(); ok {
+				if visited[num] {
+					cycle = true // walked already: skip it rather than loop
+					return nil
+				}
+				visited[num] = true
+			}
 			kids := v.Key("Kids")
 			for i := range kids.Len() {
 				if err := walk(kids.Index(i), depth+1); err != nil {
@@ -759,8 +783,21 @@ func listPages(r *object.Reader) ([]object.Value, error) {
 	if err == nil {
 		err = r.Err()
 	}
+	if err == nil && cycle {
+		if len(pages) == 0 {
+			return nil, errPageTreeCycle
+		}
+		return pages, &cycleWarning{}
+	}
 	return pages, err
 }
+
+// cycleWarning is listPages's report of a cycle it skipped while keeping
+// the pages around it: a warning, not a failure.
+type cycleWarning struct{}
+
+func (*cycleWarning) Error() string { return errPageTreeCycle.Error() }
+func (*cycleWarning) Unwrap() error { return errPageTreeCycle }
 
 type matrix [6]float64 // a b c d e f
 

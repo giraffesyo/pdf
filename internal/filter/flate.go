@@ -93,7 +93,15 @@ func (f *flateReader) Read(p []byte) (int, error) {
 	if f.r == nil {
 		return 0, errReleased
 	}
-	return f.r.Read(p)
+	n, err := f.r.Read(p)
+	if errors.Is(err, zlib.ErrChecksum) {
+		// The Adler-32 trailer is checked only once the data has all been
+		// delivered, and a wrong one — a generator's bug, common in the
+		// wild — says nothing the inflated data does not. Viewers ignore
+		// it; so does this reader.
+		err = io.EOF
+	}
+	return n, err
 }
 
 // Release returns the decompressor and buffer to their pools. The pooled

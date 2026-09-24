@@ -266,6 +266,28 @@ func TestCyclicPageTreeRejected(t *testing.T) {
 	}
 }
 
+// TestPageTreeCycleSkipped: a page tree that lists one of its own nodes
+// again keeps the pages around the cycle, as poppler does, and reports it.
+func TestPageTreeCycleSkipped(t *testing.T) {
+	doc := pdftest.Build(1,
+		pdftest.Catalog(2),
+		"<< /Type /Pages /Kids [3 0 R 2 0 R] /Count 2 >>",
+		pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+		pdftest.Stream("", "BT /F1 12 Tf 72 700 Td (kept) Tj ET"),
+		pdftest.Helvetica(),
+	)
+	d, err := Extract(context.Background(), bytes.NewReader(doc), int64(len(doc)))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if got := d.Text(); got != "kept" {
+		t.Errorf("text = %q", got)
+	}
+	if len(d.Warnings) != 1 || d.Warnings[0].Code != WarningMalformedDocument {
+		t.Errorf("warnings = %v", d.Warnings)
+	}
+}
+
 func TestExtractDocumentText(t *testing.T) {
 	doc := simpleDoc(`BT /F1 12 Tf 72 720 Td (hello world) Tj ET`)
 	d, err := Extract(context.Background(), bytes.NewReader(doc), int64(len(doc)))

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"testing"
@@ -138,5 +139,18 @@ func TestIdentityCryptFilters(t *testing.T) {
 	cfg.StrF = "Identity"
 	if _, err := New(cfg); !errors.Is(err, ErrPasswordRequired) {
 		t.Errorf("AESV3 streams without password: err = %v", err)
+	}
+}
+
+// TestHash2BKnownVector pins Algorithm 2.B against an independent
+// implementation (pypdf's AlgV5.calculate_hash) for an input whose loop
+// ends one round later than an off-by-one count of rounds would end it:
+// the empty password with salt 0x0c. The other tests build their files
+// with hash2B itself and cannot catch such a deviation.
+func TestHash2BKnownVector(t *testing.T) {
+	salt := []byte{0, 0, 0, 0, 0, 0, 0, 0x0c}
+	want := "b589371cfa79e651ac4ba5f684ede119012687729cdd94565d0d8171b0955e29"
+	if got := hex.EncodeToString(hash2B(nil, salt, nil, 6)); got != want {
+		t.Errorf("hash2B = %s, want %s", got, want)
 	}
 }
