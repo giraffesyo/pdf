@@ -32,6 +32,7 @@ import (
 	"io"
 	"math"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
@@ -899,6 +900,7 @@ type walker struct {
 	scratch  *docScratch
 	warnings []Warning
 	depth    int
+	forms    []int // object numbers of the Form XObjects being drawn
 	ops      int
 
 	// collectImages records image paintings in images, for Page.Images or
@@ -1284,6 +1286,15 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 			if xobj.Key("Subtype").Name() != "Form" {
 				break
 			}
+			num, numbered := xobj.ObjectNumber()
+			if numbered && slices.Contains(w.forms, num) {
+				// A form that draws itself, directly or through others,
+				// is drawn once, as viewers draw it.
+				if err := w.warning(WarningMalformedPage, errors.New("form XObject draws itself")); err != nil {
+					return err
+				}
+				break
+			}
 			if w.depth >= w.limits.MaxFormDepth {
 				if err := w.warning(WarningWorkLimit, errors.New("form XObject nesting exceeds limit")); err != nil {
 					return err
@@ -1303,7 +1314,13 @@ func (w *walker) walkStream(strm, resources object.Value, gs gstate) error {
 				subRes = resources
 			}
 			w.depth++
+			if numbered {
+				w.forms = append(w.forms, num)
+			}
 			err := w.walkStream(xobj, subRes, sub)
+			if numbered {
+				w.forms = w.forms[:len(w.forms)-1]
+			}
 			w.depth--
 			if err != nil {
 				return err

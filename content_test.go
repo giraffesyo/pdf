@@ -248,3 +248,32 @@ func TestType3Fonts(t *testing.T) {
 		t.Errorf("stated base encoding: lines = %q", got)
 	}
 }
+
+// TestFormDrawsItself: a Form XObject that draws itself, directly or
+// through another, is drawn once, as viewers draw it, rather than to the
+// nesting limit; the cycle is reported.
+func TestFormDrawsItself(t *testing.T) {
+	doc := pdftest.Build(1,
+		pdftest.Catalog(2),
+		pdftest.Pages(3),
+		pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> /XObject << /A 6 0 R >> >>"),
+		pdftest.Stream("", "/A Do"),
+		pdftest.Helvetica(),
+		pdftest.Stream("/Type /XObject /Subtype /Form /BBox [0 0 612 792] "+
+			"/Resources << /Font << /F1 5 0 R >> /XObject << /B 7 0 R >> >>",
+			"BT /F1 12 Tf 72 700 Td (from A) Tj ET /B Do"),
+		pdftest.Stream("/Type /XObject /Subtype /Form /BBox [0 0 612 792] "+
+			"/Resources << /Font << /F1 5 0 R >> /XObject << /A 6 0 R >> >>",
+			"BT /F1 12 Tf 72 680 Td (from B) Tj ET /A Do"),
+	)
+	d, err := Extract(t.Context(), bytes.NewReader(doc), int64(len(doc)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Text(); got != "from A\nfrom B" {
+		t.Errorf("text = %q", got)
+	}
+	if w := d.Pages[0].Warnings; len(w) != 1 || w[0].Code != WarningMalformedPage {
+		t.Errorf("warnings = %v", w)
+	}
+}
