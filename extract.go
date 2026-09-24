@@ -900,7 +900,10 @@ type walker struct {
 	warnings []Warning
 	depth    int
 	forms    []int // object numbers of the Form XObjects being drawn
-	ops      int
+	// imagesCapped is set once the page has painted more images than
+	// MaxImagesPerPage; later ones are not recorded.
+	imagesCapped bool
+	ops          int
 
 	// collectImages records image paintings in images, for Page.Images or
 	// an OCR request; their data is read afterwards by loadImages.
@@ -1386,7 +1389,14 @@ func (w *walker) recordImage(img pageImage) error {
 	// same number of images however it was extracted: bounding only the
 	// collected ones would make ImageCount depend on IncludeImages.
 	if w.imageCount >= w.limits.MaxImagesPerPage {
-		return w.stopForLimit(errors.New("image count exceeds per-page limit"))
+		// Past the limit images go unrecorded, once warned, but the page's
+		// text reads on: a scanner or Ghostscript may paint a page as
+		// thousands of image tiles around its text.
+		if !w.imagesCapped {
+			w.imagesCapped = true
+			return w.warning(WarningWorkLimit, errors.New("image count exceeds per-page limit; further images not recorded"))
+		}
+		return nil
 	}
 	w.imageCount++
 	if !w.collectImages {

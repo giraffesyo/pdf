@@ -301,6 +301,23 @@ func TestImageLoadErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("text past the image limit", func(t *testing.T) {
+		// Ghostscript and scanners may paint thousands of image tiles; past
+		// the limit they go unrecorded, and the page's text still reads.
+		data := pdftest.Build(1,
+			pdftest.Catalog(2),
+			pdftest.Pages(3),
+			pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >>"),
+			pdftest.Stream("", strings.Repeat("/Im1 Do ", 5)+"BT /F1 12 Tf 72 700 Td (after the tiles) Tj ET"),
+			pdftest.Helvetica(),
+			grayImageObj(1, 1, "\x00", ""),
+		)
+		doc, err := extractOptions(t, data, Options{Limits: Limits{MaxImagesPerPage: 3}})
+		if err != nil || doc.Text() != "after the tiles" || doc.Pages[0].ImageCount != 3 {
+			t.Errorf("text %q images %d err %v", doc.Text(), doc.Pages[0].ImageCount, err)
+		}
+	})
+
 	t.Run("stream limit", func(t *testing.T) {
 		data := imageDoc("/Im1 Do", grayImageObj(4, 4, strings.Repeat("x", 16), ""))
 		doc, err := extractOptions(t, data, Options{IncludeImages: true, Limits: Limits{MaxStreamBytes: 8}})

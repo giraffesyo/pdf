@@ -691,6 +691,14 @@ func (lx *contentLexer) readInlineImage() (dict map[string]operand, data []byte,
 			return dict, lx.data[start : start+n], true
 		}
 	}
+	if term := inlineASCIITerminator(dict); term != "" {
+		if at := bytes.Index(lx.data[start:], []byte(term)); at >= 0 {
+			if end, found := lx.inlineImageEnd(start + at + len(term)); found {
+				lx.i = end
+				return dict, lx.data[start : start+at+len(term)], true
+			}
+		}
+	}
 	for lx.i = start; lx.i+1 < len(lx.data); lx.i++ {
 		if lx.data[lx.i] != 'E' || lx.data[lx.i+1] != 'I' {
 			continue
