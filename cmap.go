@@ -1,6 +1,7 @@
 package pdf
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -30,7 +31,25 @@ type cmapData struct {
 	cids     map[codeKey]uint32
 	identity bool
 	wmode    int
+
+	// unicodeForm is set for the predefined Unicode CMaps read without
+	// their data: the code is itself the text, in this form.
+	unicodeForm unicodeForm
 }
+
+// unicodeForm is how a Unicode CMap's codes spell their characters.
+type unicodeForm uint8
+
+const (
+	notUnicode   unicodeForm = iota
+	unicodeUTF16             // UCS2 and UTF16 CMaps
+	unicodeUTF8
+	unicodeUTF32
+)
+
+// unicodeCIDUnknown stands for the CID of a Unicode CMap's code where the
+// CMap's data would be needed to know it; widths fall back to the default.
+const unicodeCIDUnknown = ^uint32(0)
 
 func identityCMap(vertical bool) *cmapData {
 	wmode := 0
@@ -83,6 +102,9 @@ func resolveCMap(name string, resolver CMapResolver, seen map[string]bool) (*cma
 		return nil, fmt.Errorf("cyclic usecmap reference %q", name)
 	}
 	if resolver == nil {
+		if cmap := unicodeCMap(name); cmap != nil {
+			return cmap, nil
+		}
 		return nil, fmt.Errorf("predefined CMap %q requires a CMapResolver", name)
 	}
 	seen[name] = true
@@ -337,6 +359,15 @@ func (c *cmapData) cid(key codeKey) uint32 {
 	if c == nil {
 		return key.value
 	}
+	if c.unicodeForm != notUnicode {
+		// Every Adobe CJK collection numbers printable ASCII from CID 1;
+		// other characters' CIDs are in the CMap's data.
+		// An ASCII code's value is its character in every form.
+		if key.value >= 0x20 && key.value <= 0x7e {
+			return key.value - 0x1f
+		}
+		return unicodeCIDUnknown
+	}
 	if cid, ok := c.cids[key]; ok {
 		return cid
 	}
@@ -344,6 +375,65 @@ func (c *cmapData) cid(key codeKey) uint32 {
 		return key.value
 	}
 	return key.value
+}
+
+// unicodeCMap returns a predefined Unicode CMap — UniJIS-UCS2-H,
+// UniGB-UTF16-V, UniKS-UTF8-H and their kin — whose codes are Unicode in
+// the form its name gives, so the characters need none of its data; only
+// the CIDs, for widths, do. It returns nil for any other name.
+func unicodeCMap(name string) *cmapData {
+	if !strings.HasPrefix(name, "Uni") || !strings.HasSuffix(name, "-H") && !strings.HasSuffix(name, "-V") {
+		return nil
+	}
+	c := &cmapData{}
+	if strings.HasSuffix(name, "-V") {
+		c.wmode = 1
+	}
+	switch {
+	case strings.Contains(name, "-UCS2-"):
+		c.unicodeForm = unicodeUTF16
+		c.spaces = []codeSpace{{low: 0, high: 0xffff, bytes: 2}}
+	case strings.Contains(name, "-UTF16-"):
+		c.unicodeForm = unicodeUTF16
+		c.spaces = []codeSpace{
+			{low: 0xd800dc00, high: 0xdbffdfff, bytes: 4}, // surrogate pairs
+			{low: 0, high: 0xffff, bytes: 2},
+		}
+	case strings.Contains(name, "-UTF8-"):
+		c.unicodeForm = unicodeUTF8
+		c.spaces = []codeSpace{
+			{low: 0, high: 0x7f, bytes: 1},
+			{low: 0xc280, high: 0xdfbf, bytes: 2},
+			{low: 0xe0a080, high: 0xefbfbf, bytes: 3},
+			{low: 0xf0908080, high: 0xf48fbfbf, bytes: 4},
+		}
+	case strings.Contains(name, "-UTF32-"):
+		c.unicodeForm = unicodeUTF32
+		c.spaces = []codeSpace{{low: 0, high: 0x10ffff, bytes: 4}}
+	default:
+		return nil
+	}
+	return c
+}
+
+// unicodeText returns the characters a Unicode CMap's code spells. The
+// code spaces bound every value: 0x10FFFF at most, and a UTF-8 code's
+// bytes are the value's own.
+func (c *cmapData) unicodeText(key codeKey) []rune {
+	switch c.unicodeForm {
+	case unicodeUTF16:
+		if key.bytes == 4 {
+			return []rune{utf16.DecodeRune(rune(key.value>>16), rune(key.value&0xffff))}
+		}
+		return []rune{rune(key.value)} //nolint:gosec // at most 0xFFFF
+	case unicodeUTF8:
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], key.value)
+		return []rune(string(b[4-key.bytes:]))
+	case unicodeUTF32:
+		return []rune{rune(key.value)} //nolint:gosec // at most 0x10FFFF
+	}
+	return nil
 }
 
 func tokenUint(t cmTok) (uint32, bool) {

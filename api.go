@@ -245,7 +245,10 @@ type FormField struct {
 }
 
 // CMapResolver supplies a named predefined CMap that is not built into the
-// package. The returned bytes use normal PDF CMap syntax.
+// package. The returned bytes use normal PDF CMap syntax. Without one, the
+// predefined Unicode CMaps still read, from their codes, with the font's
+// default width for characters outside ASCII; a resolver supplying them
+// gives their exact CIDs, and so widths.
 type CMapResolver func(name string) ([]byte, error)
 
 // OCRRequest is passed to an external OCR implementation for a page the

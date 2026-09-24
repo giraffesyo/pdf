@@ -204,9 +204,12 @@ searchable.
   sentences, text wrapped around figures — may still need
   application-specific analysis of glyph quads; `LayoutColumns` forces
   column reading and `LayoutContentOrder` keeps the stream's order.
-- `Identity-H` and `Identity-V` CMaps are built in. Other named predefined
-  CMaps are loaded through `Options.CMapResolver`; embedded CMap streams and
-  `usecmap` inheritance are parsed natively.
+- `Identity-H` and `Identity-V` CMaps are built in, and the Unicode CMaps
+  (`UniJIS-UCS2-H`, `UniGB-UTF16-H`, `UniKS-UTF8-V`, …) read without their
+  data, since their codes are the text; their non-ASCII widths then take
+  the font's default. Other named predefined CMaps — and the Unicode ones'
+  exact widths — are loaded through `Options.CMapResolver`; embedded CMap
+  streams and `usecmap` inheritance are parsed natively.
 - `Image.Decode` does not decode JPXDecode (JPEG 2000) or the Huffman,
   refinement and halftone parts of JBIG2; their encoded data is still
   reported. Soft masks and colour-key masking are not applied.
