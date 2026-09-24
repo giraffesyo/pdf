@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/giraffesyo/pdf/internal/encoding"
 	"github.com/giraffesyo/pdf/internal/object"
 )
 
@@ -133,10 +134,41 @@ func appearanceMatrix(appearance object.Value, rect Rect) (matrix, bool) {
 
 // Field flags (ISO 32000-1 §12.7.4) that change how a value is drawn.
 const (
-	fieldMultiline = 1 << 12
-	fieldPassword  = 1 << 13
-	fieldCombo     = 1 << 17
+	fieldMultiline  = 1 << 12
+	fieldPassword   = 1 << 13
+	fieldRadio      = 1 << 15
+	fieldPushbutton = 1 << 16
+	fieldCombo      = 1 << 17
 )
+
+// buttonMark returns the mark a viewer draws in a checkbox or radio
+// button that is on — its caption, /MK /CA, in ZapfDingbats: a check
+// mark by default, a bullet for a radio button — and whether it is on:
+// the field's value names the widget's on state, the key of its normal
+// appearances other than /Off.
+func buttonMark(annot object.Value, flags int64) (string, bool) {
+	value := object.Inherited(annot, "V").Name()
+	if value == "" || value == "Off" {
+		return "", false
+	}
+	on := false
+	for _, state := range annot.Key("AP").Key("N").Keys() {
+		if state != "Off" && state == value {
+			on = true
+		}
+	}
+	if !on {
+		return "", false
+	}
+	caption := objectText(annot.Key("MK").Key("CA"))
+	if caption == "" {
+		caption = "4" // ✔
+		if flags&fieldRadio != 0 {
+			caption = "l" // ●
+		}
+	}
+	return encoding.New("ZapfDingbatsEncoding", nil).Decode(caption[0]), true
+}
 
 // maxFieldRunes bounds the text drawn for one field.
 const maxFieldRunes = 4096
@@ -149,8 +181,18 @@ const maxFieldRunes = 4096
 // for rendering, and its string need not be encodable in the field font.
 func (w *walker) drawFieldValue(annot object.Value) bool {
 	var lines []string
+	centred := false
 	flags, _ := object.Inherited(annot, "Ff").Int64()
 	switch object.Inherited(annot, "FT").Name() {
+	case "Btn":
+		if flags&fieldPushbutton != 0 {
+			return false // a pushbutton's caption is its stored appearance
+		}
+		mark, on := buttonMark(annot, flags)
+		if !on {
+			return true // off: a viewer draws the empty box
+		}
+		lines, centred = []string{mark}, true
 	case "Tx":
 		value := objectText(object.Inherited(annot, "V"))
 		if flags&fieldPassword != 0 {
@@ -195,6 +237,9 @@ func (w *walker) drawFieldValue(annot object.Value) bool {
 		}
 	}
 	quadding, _ := object.Inherited(annot, "Q").Int64()
+	if centred {
+		quadding = 1
+	}
 	advance := size / 2
 	runes := 0
 	for i, line := range lines {

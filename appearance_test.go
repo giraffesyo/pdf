@@ -129,3 +129,31 @@ func TestFieldValuesWithoutAppearances(t *testing.T) {
 		t.Errorf("stored-appearance text = %q, want %q", got, want)
 	}
 }
+
+// TestButtonMarksRegenerated: when a form asks viewers to regenerate
+// appearances, a checkbox or radio button whose value selects its on
+// state shows its caption in ZapfDingbats — a check mark by default, or
+// /MK /CA — and one that is off shows nothing; a pushbutton keeps its own
+// appearance. Forms name ZapfDingbats /ZaDb without always supplying it.
+func TestButtonMarksRegenerated(t *testing.T) {
+	onOff := func(on string) string {
+		return "/AP << /N << /" + on + " 11 0 R /Off 11 0 R >> >>"
+	}
+	doc := annotatedDoc(
+		"<< /Type /Annot /Subtype /Widget /FT /Btn /V /Yes /Rect [120 690 132 702] "+onOff("Yes")+" >>",
+		"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 32768 /V /b /MK << /CA (u) >> /Rect [120 670 132 682] "+onOff("b")+" >>",
+		"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 32768 /V /b /Rect [120 650 132 662] "+onOff("c")+" >>",
+		"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /Rect [120 630 200 642] /AP << /N 12 0 R >> >>",
+		"<< /Type /Annot /Subtype /Widget /FT /Btn /V /Off /Rect [120 610 132 622] "+onOff("Yes")+" >>",
+		pdftest.Stream("/Subtype /Form /BBox [0 0 12 12]", "0 0 m 12 12 l S"), // a drawn mark: no text
+		pdftest.Stream("/Subtype /Form /BBox [0 0 80 12]", "BT /ZaDb 10 Tf 2 2 Td (4) Tj ET"),
+	)
+	doc = bytes.Replace(doc, []byte("/AcroForm <<"), []byte("/AcroForm << /NeedAppearances true"), 1)
+	d, err := extractOptions(t, doc, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := d.Text(), "Name:\n✔\n◆\n✔"; got != want {
+		t.Errorf("text = %q, want %q", got, want)
+	}
+}
