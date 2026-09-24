@@ -699,7 +699,7 @@ func (p Page) contentOrderText(keepDuplicates bool) string {
 		switch {
 		case newLine:
 			b.WriteByte('\n')
-		case g.X-(prev.X+prev.Advance) > 0.17*max(g.Size, 1):
+		case g.X-(prev.X+prev.Advance) > wordGap(max(g.Size, 1)):
 			if !endsSpace && !strings.HasPrefix(g.Text, " ") {
 				b.WriteByte(' ')
 			}

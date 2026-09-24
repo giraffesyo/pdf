@@ -190,7 +190,7 @@ func newFragment(line layoutLine, start, end int) fragment {
 	for i := start + 1; i < end; i++ {
 		prev, g := line.glyphs[i-1], line.glyphs[i]
 		if strings.TrimSpace(prev.Text) != "" && strings.TrimSpace(g.Text) != "" &&
-			g.X-(prev.X+math.Abs(prev.Advance)) > 0.17*max(g.Size, 1) {
+			g.X-(prev.X+math.Abs(prev.Advance)) > wordGap(max(g.Size, 1)) {
 			f.words++
 		}
 	}

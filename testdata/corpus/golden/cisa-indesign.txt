@@ -72,7 +72,7 @@ metal detectors or hand-held metal detectors.
 3 For more information visit cisa.gov/protective-security-advisors or email central@cisa.dhs.gov.
 4 cisa.gov/what-to-do-bomb-threat.
 CISA | DEFEND TODAY, SECURE TOMORROW
-cisa.gov Central@cisa.gov LinkedIn.com/company/cisagov @CISAgov | @cyber |@uscert_gov Facebook.com/CISA @cisagov
+cisa.gov Central@cisa.gov LinkedIn.com/company/cisagov @CISAgov | @cyber | @uscert_gov Facebook.com/CISA @cisagov
 
 PHYSICAL SECURITY CONSIDERATIONS FOR TEMPORARY FACILITIES
 IF AN INCIDENT OCCURS
@@ -122,4 +122,4 @@ suspicious activity to state and local law enforcement.
 5 community.fema.gov/until-help-arrives.
 6 dhs.gov/stopthebleed.
 CISA | DEFEND TODAY, SECURE TOMORROW
-cisa.gov Central@cisa.gov LinkedIn.com/company/cisagov @CISAgov | @cyber |@uscert_gov Facebook.com/CISA @cisagov
+cisa.gov Central@cisa.gov LinkedIn.com/company/cisagov @CISAgov | @cyber | @uscert_gov Facebook.com/CISA @cisagov
