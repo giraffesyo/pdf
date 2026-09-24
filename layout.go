@@ -36,13 +36,25 @@ func reconstructPositionText(page Page, layout LayoutOptions) string {
 	}
 
 	var b strings.Builder
-	for i, line := range lines {
-		if i > 0 {
+	for _, line := range lines {
+		if !lineHasText(line) {
+			continue // space glyphs alone: nothing a reader would see
+		}
+		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
 		writeLayoutLine(&b, line)
 	}
 	return b.String()
+}
+
+func lineHasText(line layoutLine) bool {
+	for _, g := range line.glyphs {
+		if strings.TrimSpace(g.Text) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func buildLayoutLines(glyphs []Glyph, keepDuplicates bool) []layoutLine {
