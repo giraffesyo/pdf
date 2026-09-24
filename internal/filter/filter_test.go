@@ -45,6 +45,20 @@ func TestFlateRoundTrip(t *testing.T) {
 	}
 }
 
+// TestFlateWrongChecksum: a zlib stream whose Adler-32 trailer is wrong
+// still decodes in full, as viewers read it; the checksum is checked only
+// after every byte has been delivered.
+func TestFlateWrongChecksum(t *testing.T) {
+	orig := []byte(strings.Repeat("content with a bad trailer ", 40))
+	var b bytes.Buffer
+	compress(t, zlib.NewWriter(&b), orig)
+	data := b.Bytes()
+	data[len(data)-1] ^= 0xff
+	if got := decode(t, data, "FlateDecode", Params{}); !bytes.Equal(got, orig) {
+		t.Errorf("wrong-checksum stream: got %d bytes, want %d", len(got), len(orig))
+	}
+}
+
 func TestFlateRawDeflateFallback(t *testing.T) {
 	orig := []byte("headerless deflate stream from a sloppy generator")
 	var b bytes.Buffer

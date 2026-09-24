@@ -102,7 +102,10 @@ func hash2B(password, salt, udata []byte, r int) []byte {
 		hh.Write(e)
 		k = hh.Sum(nil)
 
-		if round >= 63 && int(e[len(e)-1]) <= round-32 {
+		// Stop after the 64th round once E's last byte is at most the round
+		// number less 32, rounds counted from one (ISO 32000-2 Algorithm
+		// 2.B, as qpdf and pypdf count them).
+		if n := round + 1; n >= 64 && int(e[len(e)-1]) <= n-32 {
 			break
 		}
 	}
