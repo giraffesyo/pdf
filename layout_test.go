@@ -181,3 +181,23 @@ func TestOffPageText(t *testing.T) {
 		t.Errorf("KeepOffPageText text = %q", got)
 	}
 }
+
+// TestLayoutScripts: a footnote marker raised after its sentence and a
+// subscript lowered after its base join their line, though their small
+// size puts them outside its usual tolerance; a small caption set below a
+// heading, not at its end, does not.
+func TestLayoutScripts(t *testing.T) {
+	page := Page{Glyphs: concat(
+		run("people safe.", 10, 600, 5, 9.8),
+		run("1", 70, 603.26, 3.4, 5.71), // raised 0.33 em, where the line ends
+		run(" Although", 73.4, 600, 5, 9.8),
+		run("H", 10, 560, 6, 10),
+		run("2", 16, 557.5, 3.5, 6), // lowered 0.25 em
+		run("O", 19.5, 560, 6, 10),
+		run("Heading", 10, 500, 12, 24),
+		run("caption", 10, 492, 5, 9), // under the heading's start
+	)}
+	if got, want := page.Text(), "people safe.1 Although\nH2O\nHeading\ncaption"; got != want {
+		t.Errorf("text = %q, want %q", got, want)
+	}
+}

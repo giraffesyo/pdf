@@ -10,22 +10,19 @@ OVERVIEW
 Temporary facilities—those that are established for set timeframes for hosting a venue—face unique security challenges
 due to their provisional nature. The dynamic threat environment, inclusive of international and domestic violent
 extremists emphasizing attacks in public gathering locations, further underscore the importance of incorporating security
-1
-measures to keep facilities and people safe. Although there are currently no specific or imminent threats to temporary
+measures to keep facilities and people safe.1 Although there are currently no specific or imminent threats to temporary
 facilities, the Cybersecurity and Infrastructure Security Agency (CISA) recommends that operators determine whether a
 security plan exists for the facility and if current protective measures provide the necessary security for the event.
 VULNERABILITY ASSESSMENT & EMERGENCY ACTION PLAN
 To comprehensively mitigate the impacts of a potential attack to a temporary facility, an important first step is
 to conduct a vulnerability assessment to identify and prioritize areas of concern that need to be addressed. In
 addition, an emergency action plan should be developed to specify the steps that venue personnel should take
-2
-following an incident. These plans should be coordinated with local law enforcement agencies and first responders;
+following an incident.2 These plans should be coordinated with local law enforcement agencies and first responders;
 this is particularly important for temporary venues as emergency responders may not be familiar with the event, the
 facility, and its current temporary use/purpose. If possible, exercise the plans with venue personnel and emergency
 responders to assess capabilities and security measures to determine potential areas for improvement. CISA Protective
 Security Advisors, security subject matter experts located throughout the country, are available to assist with vulnerability
-3
-assessments, emergency action planning, exercises, and security-based coordination.
+assessments, emergency action planning, exercises, and security-based coordination.3
 RISK MITIGATION
 Upon conducting a vulnerability assessment, operators of temporary facilities should consider implementing
 appropriate protective measures to address potential gaps in security. This can be accomplished in a manner that
@@ -78,10 +75,8 @@ PHYSICAL SECURITY CONSIDERATIONS FOR TEMPORARY FACILITIES
 IF AN INCIDENT OCCURS
 Immediately call 9-1-1. Set the emergency action plan in motion. Every employee and volunteer who has an
 emergency task should know how and when to perform it; this may include life-saving procedures. The Federal Emergency
-5
-Management Agency’s You Are the Help until Help Arrives curriculum and the Department of Homeland Security Stop the
-6
-Bleed program teach life-saving first aid techniques that should be incorporated into planning efforts.
+Management Agency’s You Are the Help until Help Arrives5 curriculum and the Department of Homeland Security Stop the
+Bleed6 program teach life-saving first aid techniques that should be incorporated into planning efforts.
 RESOURCES
 CISA provides access to a wealth of capabilities that support security capacity building efforts, including
 resources, training, and exercises.
