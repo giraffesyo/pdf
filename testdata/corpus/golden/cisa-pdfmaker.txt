@@ -1,0 +1,35 @@
+CISA GATEWAY
+OVERVIEW
+Our Nation’s critical infrastructure is essential to the economy, security, and sustaining the American way of life. The
+Cybersecurity and Infrastructure Security Agency (CISA) Infrastructure Security Division (ISD) leads the coordinated
+national effort to protect critical infrastructure from all hazards by managing risk and enhancing resilience through
+collaboration with the critical infrastructure community.
+Information systems play a vital role in allowing Federal, State, local, tribal, territorial, and private (SLTT) sector partners
+to identify, analyze, and manage risk to protect the Nation. The CISA Gateway is a web-based platform that provides a
+single interface through which CISA mission partners can access a large range of integrated infrastructure protection
+tools and information used to conduct comprehensive vulnerability assessments and risk analysis. This, in turn, enables
+homeland security partners to quickly identify relevant vulnerability and consequence data in support of event planning,
+incident preparedness, and response efforts.
+FEATURES
+The CISA Gateway provides various data collection, analysis, and response tools in one integrated system, streamlining
+access to ISD’s tools and datasets by leveraging a single user registration, management, and authentication process.
+Highlights of the CISA Gateway include:
+• A selection of cyber and physical security survey and vulnerability assessment capabilities;
+• Integrated data visualization and mapping capabilities to support complex data analysis;
+• An array of tools to support critical infrastructure planning and analysis, including a robust data search capability;
+and
+• A planning and management capability that utilizes consequence, vulnerability, and threat scenario information
+to support situational awareness, response efforts, and recovery prioritization.
+CISA GATEWAY ADMINISTRATION AND ACTIONS
+The CISA Gateway is available to Federal and SLTT governments to enhance collaboration and promote cross-government
+information sharing. System administrators have been established to serve as the primary point of contact for the CISA
+Gateway within their State, locality, tribe, or territory and will be responsible for vetting and granting access to requesting
+homeland security professionals within their region. To obtain access to the CISA Gateway, all users must have a valid
+need-to-know, complete CISA Gateway system training, submit an application, and be a Protected Critical Infrastructure
+Information (PCII) Authorized User.
+RESOURCES
+If you would like to learn how the CISA Gateway can support your organization’s homeland security efforts, to inquire
+about eligibility for accessing the CISA Gateway, or if you would like to establish access to the system, please contact the
+CISA Gateway Program Office at CISA-Gateway@mail.cisa.dhs.gov.
+To learn more regarding the CISA Gateway, visit cisa.gov/cisa-gateway.
+cisa.gov central@cisa.dhs.gov @CISAgov @CISACyber @cisagov As of Sep 20, 2024

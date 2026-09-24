@@ -7,13 +7,45 @@
     "bytes": 1176344,
     "allocs": 4864
   },
+  "chrome-print": {
+    "bytes": 561141,
+    "allocs": 4229
+  },
+  "chrome-rtl": {
+    "bytes": 199360,
+    "allocs": 1747
+  },
+  "cisa-indesign": {
+    "bytes": 8825400,
+    "allocs": 44434
+  },
+  "cisa-pdfmaker": {
+    "bytes": 1162989,
+    "allocs": 3737
+  },
   "downmark-synthetic": {
     "bytes": 107521,
     "allocs": 590
   },
+  "ghostscript-ps2pdf": {
+    "bytes": 272632,
+    "allocs": 1986
+  },
+  "ghostscript-rewrite": {
+    "bytes": 552925,
+    "allocs": 3529
+  },
+  "irs-fw9": {
+    "bytes": 7566407,
+    "allocs": 18340
+  },
   "markitdown-test": {
     "bytes": 1700634,
     "allocs": 7370
+  },
+  "quartz-coretext": {
+    "bytes": 528357,
+    "allocs": 2986
   },
   "runc-security-audit": {
     "bytes": 7198421,

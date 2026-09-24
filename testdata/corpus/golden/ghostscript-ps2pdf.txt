@@ -1,0 +1,12 @@
+A PostScript letter
+Dear reader, this page was written in PostScript and distilled by Ghostscript.
+Widthshow stretches every space by two points here.
+Ashow letterspaces each glyph.
+Kerned: AVA
+Monospace: 0123456789 {braces} [brackets]
+Rotated thirty degrees
+Rotated ninety degrees
+Accents via StandardEncoding: caf´e
+α β γ δ ∞ ≥
+
+Second page, oblique.

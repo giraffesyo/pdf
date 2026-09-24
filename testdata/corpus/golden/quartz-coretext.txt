@@ -1,0 +1,30 @@
+Field notes on office efficiency
+The first figure shows a fluffy affinity for waffles — official findings, not
+fiction. Café, naïve, Straße, Ærø, Łódź.
+Column one begins here. Browsers lay out multi-column text by filling
+the first column to its height before flowing into the second, so a reader
+must finish the left column before the right one begins. Extraction that
+sorts purely by baseline interleaves the two.
+Column two continues the argument. Justified text stretches inter-word
+spacing, which a gap-based word splitter must tolerate without
+inventing or losing spaces between words.
+Item
+Qty
+Price
+Widgets
+12
+$4.50
+Gadgets
+3
+$120.00
+Total
+15
+$414.00
+Greek: Καλημέρα κόσμε. Russian: Привет, мир. Japanese: こんにちは
+世界。 Chinese: 你好，世界。
+مرحبا بالعالم
+Math: x² + y² = z², E = mc², ∑ᵢ aᵢ ≤ ∞. Code: func main()
+{ fmt.Println("hi") }
+縦書きの例
+Page two exists so the corpus covers a multi-page browser export with
+repeated fonts.

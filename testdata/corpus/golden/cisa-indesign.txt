@@ -1,0 +1,113 @@
+Supply OT Physical
+IT Interoperable
+Insider
+Chain Security Security
+Security Communications
+Threat
+PHYSICAL SECURITY CONSIDERATIONS
+FOR TEMPORARY FACILITIES
+OVERVIEW
+Temporary facilities—those that are established for set timeframes for hosting a venue—face unique security challenges
+due to their provisional nature. The dynamic threat environment, inclusive of international and domestic violent
+extremists emphasizing attacks in public gathering locations, further underscore the importance of incorporating security
+1
+measures to keep facilities and people safe. Although there are currently no specific or imminent threats to temporary
+facilities, the Cybersecurity and Infrastructure Security Agency (CISA) recommends that operators determine whether a
+security plan exists for the facility and if current protective measures provide the necessary security for the event.
+VULNERABILITY ASSESSMENT & EMERGENCY ACTION PLAN
+To comprehensively mitigate the impacts of a potential attack to a temporary facility, an important first step is
+to conduct a vulnerability assessment to identify and prioritize areas of concern that need to be addressed. In
+addition, an emergency action plan should be developed to specify the steps that venue personnel should take
+2
+following an incident. These plans should be coordinated with local law enforcement agencies and first responders;
+this is particularly important for temporary venues as emergency responders may not be familiar with the event, the
+facility, and its current temporary use/purpose. If possible, exercise the plans with venue personnel and emergency
+responders to assess capabilities and security measures to determine potential areas for improvement. CISA Protective
+Security Advisors, security subject matter experts located throughout the country, are available to assist with vulnerability
+3
+assessments, emergency action planning, exercises, and security-based coordination.
+RISK MITIGATION
+Upon conducting a vulnerability assessment, operators of temporary facilities should consider implementing
+appropriate protective measures to address potential gaps in security. This can be accomplished in a manner that
+does not preclude an open and welcoming environment, which is often a necessary criterion for temporary facilities
+that are used for special events. Based upon results of the vulnerability assessment, operators can consider a multitude
+of cost-effective protective measures to enhance security. Example protective measures include, but are not limited to:
+If the facility has a closed circuit television camera system, Ensure support personnel are familiar with de-escalation
+ensure that it is operable. If the system is to be used for tactics and to use the “buddy system” when feasible.
+crowd management, it must be monitored.
+Train support personnel to report unattended/
+Confirm parking areas provide appropriate standoff suspicious bags, parcels, or cookware immediately to law
+distance from where crowds will gather, have ways to enforcement. A suspicious item can be anything that is
+restrict high-speed avenues of approach to mitigate the use hidden, obviously suspicious, and not typical.4
+of vehicle as a weapon, and have appropriate lighting.
+Post appropriate way-finding/directional signage and the
+Use stanchions and chains/ropes to create a single file International Symbol of Accessibility on entrances and
+serpentine approach to entry to limit the amount of people paths that guide the public to the facility.
+at the entry point.
+Remove items within the perimeter that can be thrown Secure non-public entrances or post workers to monitor
+through windows or hide an incendiary or explosive device.  non-public entrances.
+This includes removing or locking trash receptacles.
+Secure chemicals that could pose risks to human life
+Establish primary and alternate methods of communication or health.
+with local law enforcement to ensure timely and accurate
+information sharing and suspicious activity reporting.
+Consider measures related to access control—bag check
+procedures, identification of screened personnel, and
+Advise support personnel of simple steps (i.e., run, hide, implementation of screening devices such as walk-through
+fight) to follow during an active shooter incident. metal detectors or hand-held metal detectors.
+1 For continued information on threats, visit the National Terrorism Advisory System web page at dhs.gov/national-terrorism-advisory-system.
+2 cisa.gov/active-shooter-emergency-action-plan-video.
+3 For more information visit cisa.gov/protective-security-advisors or email central@cisa.dhs.gov.
+4 cisa.gov/what-to-do-bomb-threat.
+CISA | DEFEND TODAY, SECURE TOMORROW
+cisa.gov Central@cisa.gov LinkedIn.com/company/cisagov @CISAgov | @cyber |@uscert_gov Facebook.com/CISA @cisagov
+
+PHYSICAL SECURITY CONSIDERATIONS FOR TEMPORARY FACILITIES
+IF AN INCIDENT OCCURS
+Immediately call 9-1-1. Set the emergency action plan in motion. Every employee and volunteer who has an
+emergency task should know how and when to perform it; this may include life-saving procedures. The Federal Emergency
+5
+Management Agency’s You Are the Help until Help Arrives curriculum and the Department of Homeland Security Stop the
+6
+Bleed program teach life-saving first aid techniques that should be incorporated into planning efforts.
+RESOURCES
+CISA provides access to a wealth of capabilities that support security capacity building efforts, including
+resources, training, and exercises.
+Active Shooter Preparedness
+cisa.gov/active-shooter-preparedness
+Consists of resources and trainings that focus on behavioral indicators, emergency action plan creation, actions that
+may be taken during an incident to reduce consequences, and how to quickly recover from an incident.
+Commercial Facilities Publications
+cisa.gov/commercial-facilities-publications
+Provides access to resources specifically geared towards planning and managing security at facilities.
+Securing Public Gatherings
+cisa.gov/securing-public-gatherings
+Provides access to information regarding the types of threats posed to public gatherings and resources with options for
+consideration to support risk mitigation activities.
+Employee Vigilance – Power of Hello
+cisa.gov/employee-vigilance-power-hello
+Provides information on actions that may be taken when suspicious behavior is observed.
+De-Escalation for Critical Infrastructure Owners and Operators
+cisa.gov/de-escalation-series
+Provides information on communication or other techniques during an encounter to stabilize, slow, or
+reduce the intensity of a potentially violent situation without using physical force.
+Bombing Prevention
+cisa.gov/office-bombing-prevention-obp
+Maintains a range of actionable counter-improvised explosive device security and preparedness resources,
+including those focused on how to safely respond to bomb threats or suspicious items, gain threat and incident
+information, and access training and awareness videos to enhance preparedness.
+Exercises
+cisa.gov/critical-infrastructure-exercises
+Offers a wide range of exercise services, including customizable CISA tabletop exercise packages to address
+a variety of threat scenarios.
+ChemLock - Security Plan
+cisa.gov/chemlock-security-plan
+For a security plan template visit ChemLock.
+Department of Homeland Security’s (DHS) If You See Something, Say Something®
+dhs.gov/see-something-say-something
+Provides public awareness of the indicators of terrorism and targeted violence, as well as the importance of reporting
+suspicious activity to state and local law enforcement.
+5 community.fema.gov/until-help-arrives.
+6 dhs.gov/stopthebleed.
+CISA | DEFEND TODAY, SECURE TOMORROW
+cisa.gov Central@cisa.gov LinkedIn.com/company/cisagov @CISAgov | @cyber |@uscert_gov Facebook.com/CISA @cisagov

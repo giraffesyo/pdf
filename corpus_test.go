@@ -12,7 +12,8 @@ import (
 
 // The real-document corpus under testdata/corpus complements the synthetic
 // fixtures: it pins Document.Text for files produced by real generators
-// (LaTeX, Word, scanning pipelines) with embedded Type1, TrueType, and CFF
+// (LaTeX, Word, InDesign, form designers, browsers, macOS Quartz,
+// Ghostscript, scanning pipelines) with embedded Type1, TrueType, and CFF
 // fonts across multiple pages, so a layout, decoding, or performance change
 // shows up as a reviewable diff rather than a surprise downstream.
 // Provenance and licenses are in testdata/corpus/NOTICE.md.
