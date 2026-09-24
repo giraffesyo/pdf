@@ -63,7 +63,9 @@ func aesNoPadEncrypt(key, data []byte) []byte {
 		panic(err)
 	}
 	out := make([]byte, len(data))
-	cipher.NewCBCEncrypter(block, make([]byte, aes.BlockSize)).CryptBlocks(out, data)
+	// ISO 32000-2 §7.6.4.4.7-8 wraps the file key in /UE and /OE with
+	// AES-256-CBC and a zero IV; the fixture must do the same.
+	cipher.NewCBCEncrypter(block, make([]byte, aes.BlockSize)).CryptBlocks(out, data) //nolint:gosec // the spec's zero IV
 	return out
 }
 
