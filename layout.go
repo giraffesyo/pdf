@@ -348,7 +348,6 @@ func writeLayoutLine(b *strings.Builder, line layoutLine) {
 // would otherwise split a word. A space drawn between its neighbours stays
 // even when kerning pulls them over it, as right-aligned page numbers do.
 func walkLayoutLine(line layoutLine, emit func(string)) {
-	endsSpace := false
 	pending := ""     // whitespace glyphs held until text follows them
 	pendingMid := 0.0 // midpoint of the last of them
 	pendingIndex := 0 // content index of the last of them
@@ -378,8 +377,7 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 			switch {
 			case pending != "":
 				emit(pending)
-				endsSpace = true
-			case !endsSpace && !strings.HasPrefix(glyph.Text, " "):
+			case !strings.HasPrefix(glyph.Text, " "):
 				threshold := 0.17 * glyph.Size
 				if threshold <= 0 {
 					threshold = 1
@@ -391,7 +389,6 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 		}
 		text := strings.TrimRightFunc(glyph.Text, unicode.IsSpace)
 		emit(text)
-		endsSpace = false
 		pending = glyph.Text[len(text):]
 		pendingMid, pendingIndex = end, glyph.index
 		wrote = true
