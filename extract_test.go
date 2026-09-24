@@ -334,11 +334,76 @@ func FuzzExtract(f *testing.F) {
 		pdftest.Catalog(2), pdftest.Pages(3),
 		pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
 		pdftest.Stream("", seed), pdftest.Helvetica()))
+	for _, doc := range fuzzSeedDocuments() {
+		f.Add(doc)
+	}
 	f.Fuzz(func(_ *testing.T, data []byte) {
 		// Extract must never panic or hang: the object layer returns errors
 		// rather than panicking, and the page tree is gated before walking.
-		_, _ = Extract(context.Background(), bytes.NewReader(data), int64(len(data)))
+		// Text runs the layout — columns, right-to-left order, duplicates,
+		// scripts — in every mode.
+		doc, _ := Extract(context.Background(), bytes.NewReader(data), int64(len(data)))
+		if doc == nil {
+			return
+		}
+		for _, page := range doc.Pages {
+			for _, mode := range []LayoutMode{LayoutPosition, LayoutContentOrder, LayoutColumns} {
+				_ = page.TextWithOptions(LayoutOptions{Mode: mode})
+			}
+		}
 	})
+}
+
+// fuzzSeedDocuments are documents that reach the paths added since the
+// fuzz corpus was seeded: Type3 fonts, forms regenerated from their
+// fields, annotation appearances, Unicode and CJK composite fonts, forms
+// that draw themselves, side-by-side columns, right-to-left text, and
+// text off the page.
+func fuzzSeedDocuments() [][]byte {
+	page := func(resources, content string, extra ...string) []byte {
+		objs := append([]string{
+			"<< /Type /Catalog /Pages 2 0 R /AcroForm << /NeedAppearances true /DR << /Font << /Helv 5 0 R >> >> >> >>",
+			pdftest.Pages(3),
+			"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources " + resources +
+				" /Contents 4 0 R /Annots [7 0 R 8 0 R 9 0 R] >>",
+			pdftest.Stream("", content),
+			pdftest.Helvetica(),
+		}, extra...)
+		return pdftest.Build(1, objs...)
+	}
+	widgets := []string{
+		"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 50 50] /FontMatrix [1 0 0 1 0 0] /CharProcs << >> " +
+			"/Encoding << /Differences [72 /H 97 /a97 98 /Q7] /BaseEncoding /WinAnsiEncoding >> /FirstChar 72 /LastChar 98 /Widths [25] >>",
+		"<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 8192 /V (s3cret) /DA (/Helv 0 Tf) /Rect [10 10 90 30] >>",
+		"<< /Type /Annot /Subtype /Widget /FT /Btn /V /Yes /MK << /CA (l) >> /Rect [10 40 22 52] /AP << /N << /Yes 10 0 R /Off 10 0 R >> >> >>",
+		"<< /Type /Annot /Subtype /Widget /FT /Ch /TI 1 /V [(B) (C)] /Opt [(A) [(b) (B)] (C)] /DA (/ZaDb 10 Tf) /Rect [10 60 90 80] >>",
+		pdftest.Stream("/Subtype /Form /BBox [0 0 12 12] /Matrix [1 0 0 1 0 0]", "BT /ZaDb 9 Tf (4) Tj ET /X Do"),
+	}
+	columns := "BT /F1 10 Tf 20 250 Td (a left column of prose words) Tj 0 -12 Td (continues down the left side) Tj " +
+		"0 -12 Td (for a third line here) Tj ET BT /F1 10 Tf 170 250 Td (and a right column follows it) Tj " +
+		"0 -12 Td (with prose of its own too) Tj 0 -12 Td (down its three lines) Tj ET " +
+		"BT /F1 10 Tf 20 700 Td (off the page) Tj ET BT /F1 5 Tf 120 253 Td (1) Tj ET"
+	return [][]byte{
+		page("<< /Font << /F1 5 0 R /T3 6 0 R >> >>", columns+" BT /T3 0.24 Tf 10 100 Td (HaQ) Tj ET", widgets...),
+		page("<< /Font << /F1 5 0 R >> /XObject << /X 10 0 R >> >>", "/X Do", widgets...),
+		pdftest.Build(1,
+			pdftest.Catalog(2), pdftest.Pages(3),
+			pdftest.Page(2, 4, "<< /Font << /F1 5 0 R /F2 7 0 R >> >>"),
+			pdftest.Stream("", "BT /F1 10 Tf 72 700 Td <0041597D0042> Tj /F2 10 Tf 0 -20 Td <0465034A0029> Tj ET"),
+			"<< /Type /Font /Subtype /Type0 /BaseFont /S /Encoding /UniJIS-UTF16-H /DescendantFonts [6 0 R] >>",
+			"<< /Type /Font /Subtype /CIDFontType0 /BaseFont /S /DW 1000 /W [34 [600]] "+
+				"/CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> >>",
+			"<< /Type /Font /Subtype /Type0 /BaseFont /S /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
+		),
+		pdftest.Build(1,
+			pdftest.Catalog(2), pdftest.Pages(3),
+			pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+			pdftest.Stream("", "BT /F1 12 Tf 72 700 Td <0645062D0645062F> Tj 0 -14 Td <05E905DC05D5> Tj ET"),
+			pdftest.Type0Font(6, 7),
+			pdftest.CIDFont(""),
+			pdftest.ToUnicodeCMap("1 beginbfrange\n<0000> <FFFF> <0000>\nendbfrange"),
+		),
+	}
 }
 
 func TestGarbageStreamNoPanic(t *testing.T) {

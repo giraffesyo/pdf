@@ -1,6 +1,10 @@
 package pdf
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 // TestRightToLeftLogicalOrder: glyphs are painted in visual order, left to
 // right across the page; Text reads right-to-left scripts back in logical
@@ -26,4 +30,22 @@ func TestRightToLeftLogicalOrder(t *testing.T) {
 			t.Errorf("visual %q: text = %q, want %q", tc.visual, got, tc.logical)
 		}
 	}
+}
+
+// FuzzBidi checks that converting a line to logical order only reorders
+// its pieces: none lost, none duplicated, none invented.
+func FuzzBidi(f *testing.F) {
+	f.Add("ملاعلاب ابحرم")
+	f.Add("3.14 :םלוע )םולש(")
+	f.Add("Price: 1,250.75 لكيش today")
+	f.Fuzz(func(t *testing.T, s string) {
+		pieces := strings.Split(s, "")
+		got := logicalOrder(pieces)
+		a, b := slices.Clone(pieces), slices.Clone(got)
+		slices.Sort(a)
+		slices.Sort(b)
+		if !slices.Equal(a, b) {
+			t.Fatalf("logicalOrder(%q) = %q: not a permutation", pieces, got)
+		}
+	})
 }

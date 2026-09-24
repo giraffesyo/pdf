@@ -1,8 +1,10 @@
 package pdf
 
 import (
+	"maps"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // run lays out text as glyphs of a fixed advance from (x, y), in order.
@@ -200,4 +202,68 @@ func TestLayoutScripts(t *testing.T) {
 	if got, want := page.Text(), "people safe.1 Although\nH2O\nHeading\ncaption"; got != want {
 		t.Errorf("text = %q, want %q", got, want)
 	}
+}
+
+// FuzzLayout builds pages of glyphs from fuzz input — Latin, Arabic,
+// Hebrew, CJK, digits, and spaces at arbitrary positions, sizes, and
+// directions — and checks what every layout mode must keep whatever it
+// reorders: with duplicates and off-page text kept, the text holds
+// exactly the glyphs' characters other than whitespace, each once.
+func FuzzLayout(f *testing.F) {
+	f.Add([]byte("\x01\x10\x10\x0a\x05\x00\x02\x12\x10\x0a\x05\x00\x03\x30\x20\x0a\x05\x00"))
+	f.Add([]byte("\x10\x10\x10\x08\x04\x00\x11\x14\x10\x08\x04\x00\x12\x18\x10\x08\x04\x00\x05\x50\x10\x08\x04\x00"))
+	f.Add([]byte("\x14\x10\x40\x14\x0a\x01\x15\x10\x38\x14\x0a\x01\x16\x40\x40\x06\x03\x03"))
+	alphabet := []string{" ", "a", "b", "c", "d", "e", "A", "1", "2", ".", ",", "-",
+		"(", ")", "ب", "ت", "ث", "א", "ב", "ג", "中", "文", "ﬁ", "fi", "é"}
+	dirs := []Point{{X: 1}, {Y: 1}, {Y: -1}, {X: -1}, {X: 0.6, Y: 0.8}}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var glyphs []Glyph
+		for i := 0; i+6 <= len(data) && len(glyphs) < 400; i += 6 {
+			size := 1 + float64(data[i+3]%24)
+			glyphs = append(glyphs, Glyph{
+				Text:      alphabet[int(data[i])%len(alphabet)],
+				X:         float64(data[i+1]) * 2.5,
+				Y:         float64(data[i+2]) * 2.5,
+				Size:      size,
+				Advance:   size * float64(data[i+4]%16) / 8,
+				Direction: dirs[int(data[i+5])%len(dirs)],
+			})
+		}
+		want := nonSpaceRunes(glyphs)
+		page := Page{MediaBox: Rect{MaxX: 300, MaxY: 300}, Glyphs: glyphs}
+		for _, mode := range []LayoutMode{LayoutPosition, LayoutContentOrder, LayoutColumns} {
+			got := page.TextWithOptions(LayoutOptions{Mode: mode, KeepDuplicateGlyphs: true, KeepOffPageText: true})
+			if g := runeCounts(got); !maps.Equal(g, want) {
+				t.Fatalf("mode %d lost or invented text:\n glyphs %q\n text   %q", mode, glyphTexts(glyphs), got)
+			}
+			// The defaults may drop repeats and off-page text, but never panic.
+			_ = page.TextWithOptions(LayoutOptions{Mode: mode})
+		}
+	})
+}
+
+func nonSpaceRunes(glyphs []Glyph) map[rune]int {
+	var b strings.Builder
+	for _, g := range glyphs {
+		b.WriteString(g.Text)
+	}
+	return runeCounts(b.String())
+}
+
+func runeCounts(s string) map[rune]int {
+	counts := map[rune]int{}
+	for _, r := range s {
+		if !unicode.IsSpace(r) {
+			counts[r]++
+		}
+	}
+	return counts
+}
+
+func glyphTexts(glyphs []Glyph) []string {
+	texts := make([]string, len(glyphs))
+	for i, g := range glyphs {
+		texts[i] = g.Text
+	}
+	return texts
 }

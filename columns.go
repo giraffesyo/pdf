@@ -36,6 +36,9 @@ const (
 	// its usual line pitch: both columns breaking at once marks a new
 	// region of the page.
 	maxBandGapPitches = 2.5
+	// maxBandGapLines ends a band at a vertical gap this many font sizes
+	// tall, which no column's lines fill.
+	maxBandGapLines = 4
 	// minColumnEm is the narrowest column, in font sizes: narrower strips
 	// hold list bullets, numbers, or line numbers beside their text.
 	minColumnEm = 4
@@ -120,10 +123,12 @@ func readingOrder(lines []layoutLine, allGutters bool) []layoutLine {
 		kept = gutters
 		// A band can start at a row that merely sits between the columns —
 		// a centred author line — and settle on a gap that is no gutter.
-		// If a band starting a row or two later is larger, the rows before
-		// it read alone.
+		// If a band of columns starting a row or two later is larger, the
+		// rows before it read alone.
 		for later := start + 1; later < min(end, start+1+bandLookahead); later++ {
-			if laterEnd, _ := band.grow(rows, later); laterEnd-later > end-start {
+			laterEnd, laterGutters := band.grow(rows, later)
+			if laterEnd-later > end-start && len(laterGutters) > 0 &&
+				(allGutters || sideBySide(rows[later:laterEnd], laterGutters)) {
 				end, gutters = later, nil
 				break
 			}
@@ -230,6 +235,9 @@ func (b *bandState) grow(rows []row, start int) (int, []interval) {
 		if len(b.pitches) > 0 && gap > maxBandGapPitches*b.pitches[len(b.pitches)/2] {
 			break
 		}
+		if gap > maxBandGapLines*max(b.size, r.size) {
+			break // a hole across every column: a new region of the page
+		}
 		column := -1
 		if len(b.kept) > 0 {
 			column = rowColumn(r, b.kept)
@@ -247,8 +255,13 @@ func (b *bandState) grow(rows []row, start int) (int, []interval) {
 			break
 		}
 		b.kept = append(b.kept[:0], b.gutters...)
-		at, _ := slices.BinarySearch(b.pitches, gap)
-		b.pitches = slices.Insert(b.pitches, at, gap)
+		// A gap under half a line is a raised or offset baseline — a
+		// superscript, a neighbouring column's staggered line — not the
+		// band's pitch, and would make every real line gap look wide.
+		if gap >= 0.5*max(b.size, r.size) {
+			at, _ := slices.BinarySearch(b.pitches, gap)
+			b.pitches = slices.Insert(b.pitches, at, gap)
+		}
 		switch {
 		case column < 0:
 			columns = 2
