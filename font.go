@@ -598,7 +598,7 @@ func cjkRomanText(cid uint32, japan bool) string {
 	case japan && cid == 95:
 		return "‾"
 	}
-	return string(rune(0x1f + cid))
+	return string(rune(0x1f + cid)) //nolint:gosec // cid is 1–95
 }
 
 // embeddedText returns the font program's hint for code, parsing the
