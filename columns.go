@@ -4,6 +4,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -77,14 +78,11 @@ type interval struct{ lo, hi float64 }
 // readingOrder orders a page's lines for reading: top to bottom, and
 // column by column within bands of side-by-side prose. With allGutters,
 // every band with a gutter reads column by column, tables included.
-func readingOrder(lines []layoutLine, allGutters bool) []layoutLine {
-	type placed struct {
-		line layoutLine
-		top  float64
-	}
-	rows := make([]row, 0, len(lines))
-	fragments := make([]fragment, 0, len(lines)+len(lines)/2)
-	var other []placed
+// The result aliases sc, which the caller must not return to its pool
+// until it is done with the lines.
+func readingOrder(lines []layoutLine, allGutters bool, sc *orderScratch) []layoutLine {
+	rows, fragments, other := sc.rows[:0], sc.fragments[:0], sc.other[:0]
+	defer func() { sc.rows, sc.fragments, sc.other = rows, fragments, other }()
 	for _, line := range lines {
 		if len(line.glyphs) == 0 || line.dir.X < 0.97 {
 			// Rotated or vertical text, placed where its reading starts.
@@ -109,10 +107,13 @@ func readingOrder(lines []layoutLine, allGutters bool) []layoutLine {
 		}
 		return compareLayoutLines(a.line, b.line)
 	})
-	ordered := make([]layoutLine, 0, len(lines))
+	ordered := sc.ordered[:0]
+	defer func() { sc.ordered = ordered }()
 	next := 0
-	band := &bandState{explicit: allGutters}
-	var kept []interval
+	band := &sc.band
+	band.explicit = allGutters
+	kept := sc.kept[:0]
+	defer func() { sc.kept = kept }()
 	for start := 0; start < len(rows); {
 		for next < len(other) && other[next].top > rows[start].offset {
 			ordered = append(ordered, other[next].line)
@@ -140,6 +141,46 @@ func readingOrder(lines []layoutLine, allGutters bool) []layoutLine {
 		ordered = append(ordered, p.line)
 	}
 	return ordered
+}
+
+// placed is a rotated or vertical line and the height it starts at.
+type placed struct {
+	line layoutLine
+	top  float64
+}
+
+// orderScratch is the working memory readingOrder reuses from page to
+// page, pooled: rows and their fragments, the lines it orders, and the
+// band state.
+type orderScratch struct {
+	rows      []row
+	fragments []fragment
+	other     []placed
+	ordered   []layoutLine
+	kept      []interval
+	band      bandState
+}
+
+var orderScratchPool = sync.Pool{New: func() any { return new(orderScratch) }}
+
+// maxPooledLines bounds the scratch a pool keeps: a page of a few
+// hundred lines is common, one of tens of thousands is not worth holding.
+const maxPooledLines = 1 << 14
+
+func putOrderScratch(sc *orderScratch) {
+	if cap(sc.rows) > maxPooledLines || cap(sc.fragments) > 2*maxPooledLines {
+		return
+	}
+	for i := range sc.ordered {
+		sc.ordered[i] = layoutLine{} // drop the page's glyphs
+	}
+	for i := range sc.rows {
+		sc.rows[i] = row{}
+	}
+	for i := range sc.other {
+		sc.other[i] = placed{}
+	}
+	orderScratchPool.Put(sc)
 }
 
 // lineStart is the height at which a line's text begins: its first

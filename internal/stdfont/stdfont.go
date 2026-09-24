@@ -8,7 +8,10 @@
 // NOTICE for their terms.
 package stdfont
 
-import "strings"
+import (
+	"bytes"
+	"strings"
+)
 
 // Font is a standard font's metrics.
 type Font struct {
@@ -16,8 +19,6 @@ type Font struct {
 	byCode  *[256]uint16      // by code, for Symbol and ZapfDingbats
 	courier bool              // every glyph 600
 }
-
-var separators = strings.NewReplacer(" ", "", "-", "", ",", "")
 
 // Lookup returns the standard font a /BaseFont names — directly, or by
 // the names Windows and others give their metric-compatible faces (Arial
@@ -28,23 +29,36 @@ func Lookup(baseFont string) (Font, bool) {
 	if plus := strings.IndexByte(name, '+'); plus == 6 {
 		name = name[plus+1:]
 	}
-	lower := strings.ToLower(name)
-	bold := strings.Contains(lower, "bold") || strings.Contains(lower, "black") || strings.Contains(lower, "heavy")
-	italic := strings.Contains(lower, "italic") || strings.Contains(lower, "oblique")
-	family := separators.Replace(lower)
+	// Lower-cased, without separators, in a buffer of its own: no
+	// allocation for the few fonts a document names.
+	var buf [64]byte
+	family := buf[:0]
+	for i := 0; i < len(name) && len(family) < len(buf); i++ {
+		switch c := name[i]; {
+		case c == ' ' || c == '-' || c == ',':
+		case c >= 'A' && c <= 'Z':
+			family = append(family, c+'a'-'A')
+		default:
+			family = append(family, c)
+		}
+	}
+	has := func(s string) bool { return bytes.Contains(family, []byte(s)) }
+	starts := func(s string) bool { return bytes.HasPrefix(family, []byte(s)) }
+	bold := has("bold") || has("black") || has("heavy")
+	italic := has("italic") || has("oblique")
 	switch {
-	case strings.HasPrefix(family, "symbol"):
+	case starts("symbol"):
 		return Font{byCode: &symbolWidths}, true
-	case strings.HasPrefix(family, "zapfdingbats"), strings.HasPrefix(family, "dingbats"):
+	case starts("zapfdingbats"), starts("dingbats"):
 		return Font{byCode: &zapfDingbatsWidths}, true
-	case strings.HasPrefix(family, "courier"):
+	case starts("courier"):
 		return Font{courier: true}, true
-	case strings.HasPrefix(family, "helvetica"), strings.HasPrefix(family, "arial"):
+	case starts("helvetica"), starts("arial"):
 		if bold {
 			return Font{latin: latinWidths["Helvetica-Bold"]}, true
 		}
 		return Font{latin: latinWidths["Helvetica"]}, true
-	case strings.HasPrefix(family, "times"):
+	case starts("times"):
 		switch {
 		case bold && italic:
 			return Font{latin: latinWidths["Times-BoldItalic"]}, true
