@@ -126,7 +126,7 @@ func logicalOrder(pieces []string) []string {
 	// left-to-right line a number led by left-to-right text is left-to-right
 	// (W7).
 	lastStrong := make([]bidiClass, len(pieces)) // nearest strong class before i, in visual order
-	prev := bidiLeft // the line's start takes the base direction (sos)
+	prev := bidiLeft                             // the line's start takes the base direction (sos)
 	if rtlBase {
 		prev = bidiRight
 	}
