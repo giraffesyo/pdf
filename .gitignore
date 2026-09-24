@@ -1,0 +1,2 @@
+# Test binaries left by go test -c, -cpuprofile, or -memprofile.
+*.test
