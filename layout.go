@@ -22,6 +22,8 @@ type layoutLine struct {
 	normal Point
 	offset float64
 	first  int
+	size   float64 // the largest glyph's size
+	end    float64 // the furthest glyph end along dir
 }
 
 func reconstructPositionText(page Page, layout LayoutOptions) string {
@@ -81,6 +83,7 @@ func buildLayoutLines(glyphs []Glyph, keepDuplicates bool) []layoutLine {
 	var lines []layoutLine
 	lineIndex := make([]map[int][]int, directionBuckets)
 	prev := -1 // the line the previous glyph joined
+	maxSize := 0.0
 	for i, glyph := range glyphs {
 		dir := glyphDirection(glyph)
 		normal := Point{X: -dir.Y, Y: dir.X}
@@ -119,6 +122,10 @@ func buildLayoutLines(glyphs []Glyph, keepDuplicates bool) []layoutLine {
 				}
 			}
 		}
+		if best < 0 && glyph.Size < 0.8*maxSize {
+			best = scriptLine(lines, lineIndex, bucket, glyph, dir, offset, offsetCell, maxSize)
+		}
+		maxSize = max(maxSize, glyph.Size)
 		item := layoutGlyph{Glyph: &glyphs[i], index: i}
 		if best < 0 {
 			lines = append(lines, layoutLine{
@@ -127,6 +134,8 @@ func buildLayoutLines(glyphs []Glyph, keepDuplicates bool) []layoutLine {
 				normal: normal,
 				offset: offset,
 				first:  i,
+				size:   glyph.Size,
+				end:    glyphProjection(glyph, dir, true),
 			})
 			if lineIndex[bucket] == nil {
 				lineIndex[bucket] = map[int][]int{}
@@ -137,6 +146,8 @@ func buildLayoutLines(glyphs []Glyph, keepDuplicates bool) []layoutLine {
 			continue
 		}
 		lines[best].glyphs = append(lines[best].glyphs, item)
+		lines[best].size = max(lines[best].size, glyph.Size)
+		lines[best].end = max(lines[best].end, glyphProjection(glyph, dir, true))
 		prev = best
 	}
 	for i, n := 0, len(lines); i < n; i++ {
@@ -341,6 +352,43 @@ func splitOverlaidRuns(line *layoutLine) []layoutLine {
 		extra = append(extra, split)
 	}
 	return extra
+}
+
+// scriptLine finds the line a superscript or subscript belongs to: a
+// glyph smaller than the line's text, raised by up to half the line's
+// size or lowered by up to a quarter of it, drawn where the line ends — a
+// footnote marker after its sentence, an exponent after its base. Its own
+// small size puts such a glyph outside its line's usual tolerance. It
+// returns -1 when no line qualifies; a caption beside a heading is not
+// at the heading's end, nor within its baseline's reach.
+func scriptLine(lines []layoutLine, index []map[int][]int, bucket int, glyph Glyph, dir Point, offset, cell, maxSize float64) int {
+	cells := index[bucket]
+	if cells == nil {
+		return -1
+	}
+	start := glyphProjection(glyph, dir, false)
+	radius := int(math.Ceil(0.5*maxSize/cell)) + 1
+	key := int(math.Floor(offset / cell))
+	best, bestDistance := -1, math.MaxFloat64
+	for delta := -radius; delta <= radius; delta++ {
+		for _, j := range cells[key+delta] {
+			line := &lines[j]
+			if dotPoint(dir, line.dir) < 0.985 || glyph.Size > 0.8*line.size {
+				continue
+			}
+			rise := offset - line.offset
+			if rise > 0.5*line.size || rise < -0.25*line.size {
+				continue
+			}
+			if math.Abs(start-line.end) > 0.5*line.size {
+				continue
+			}
+			if d := math.Abs(rise); d < bestDistance {
+				best, bestDistance = j, d
+			}
+		}
+	}
+	return best
 }
 
 // layoutLineSorted reports whether the line's glyphs, which are in index

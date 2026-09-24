@@ -284,8 +284,7 @@ Having a good logging/monitoring system in place allows developers and users to
 identify potential issues more easily or get an idea of what is going wrong. It can also
 provide security-relevant information, for example when a verification of a signature fails.
 Consequently, having such a system in place has a positive influence on the project.
-1
-runc makes use of logrus , a structured logging system that is compatible with Golang’s
+runc makes use of logrus1, a structured logging system that is compatible with Golang’s
 standard library logger. Although logrus offers a transparent API that replaces the
 standard logging functionality, runc explicitly invokes logrus when needed. It would make
 sense to centralize its usage by globally overriding the intrinsic log feature. This is
@@ -335,8 +334,7 @@ somewhat scattered around and makes it hard to obtain a full picture of the soft
 complex. Thus, it is possible to overlook one or the other documented pitfall. On the one
 hand, it may also be advantageous to get more detailed descriptions of the function of
 the namespaces and cgroups in relation to runc. On the other hand, highly sensible
-2 3
-development principles and equally detailed maintainer guidelines underline the
+development principles2 and equally detailed maintainer guidelines3 underline the
 earnest approach the developers are taking.
 Organization/Team/Infrastructure Specifics
 This section will describe the areas Cure53 looked at to find out about the security
@@ -360,8 +358,7 @@ Dr.-Ing. Mario Heiderich, Cure53
 Bielefelder Str. 14
 D 10709 Berlin
 cure53.de · mario@cure53.de
-4
-Alongside security notes , runc offers the relevant contact’s email address
+Alongside security notes4, runc offers the relevant contact’s email address
 (security@opencontainers.org). However, the document omits important details, such as
 the respective PGP keys and an outline of the disclosure process. Upon handling the
 reporting of the vulnerability described in RUN-01-001, Cure53 found the response times
@@ -462,8 +459,7 @@ especially system calls are being used to create a container.
 • It was attempted to locate TOCTOU errors in handling files/path; the
 EnsureProcHandle() is used properly.
 • It was investigated what the impact of shared namespaces would be, but failing
-5
-to join mount/pid namespaces stopped these efforts.
+to join mount/pid namespaces5 stopped these efforts.
 • The access controls handled by runc were audited to figure out what the
 expectations on the host system are.
 • The integration of CRIU with respect to abusing its invocation via runc-
@@ -501,8 +497,7 @@ It has to be noted that the applied path-based approach used within the runc cod
 is generally not race-safe, even as far as the application of the filepath-securejoin
 package is concerned. These path aspects, quite prone to race-conditions, should
 eventually be reworked to handle paths via filedescriptors and cease using textual file
-6
-paths, as evidenced by the related issue .
+paths, as evidenced by the related issue6.
 Identified Vulnerabilities
 The following sections list both vulnerabilities and implementation issues spotted during
 the testing period. Note that findings are listed in chronological order rather than by their
@@ -513,8 +508,7 @@ future follow-up correspondence.
 RUN-01-001 Race-condition bypassing masked paths (High)
 Through relationships to various security researchers, an interesting opportunity for a
 security review emerged. Leopold Schabel (aka leoluk), who had previously reported an
-7
-issue as a publicly disclosed runc vulnerability, discovered a race-condition involving
+issue as a publicly disclosed runc7 vulnerability, discovered a race-condition involving
 two containers that can be used to bypass the read-only remounting of the potentially
 dangerous /proc filesystem paths.
 The issue was reported by the discoverer at midnight UTC on the 26th/27th of
