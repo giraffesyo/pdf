@@ -212,7 +212,10 @@ searchable.
   data, since their codes are the text; their non-ASCII widths then take
   the font's default. Other named predefined CMaps — and the Unicode ones'
   exact widths — are loaded through `Options.CMapResolver`; embedded CMap
-  streams and `usecmap` inheritance are parsed natively.
+  streams and `usecmap` inheritance are parsed natively. A font in one of
+  Adobe's CJK collections (Japan1, GB1, CNS1, Korea1, KR) with neither a
+  ToUnicode map nor a cmap reads its CIDs through the collection's
+  character table, built in (about 120 KB).
 - `Image.Decode` does not decode JPXDecode (JPEG 2000) or the Huffman,
   refinement and halftone parts of JBIG2; their encoded data is still
   reported. Soft masks and colour-key masking are not applied.
@@ -326,4 +329,7 @@ reproduced synthetically, with fuzzing on top.
 ## License
 
 MIT. Embeds the [Adobe Glyph List](https://github.com/adobe-type-tools/agl-aglfn)
-(Apache-2.0) for glyph-name decoding.
+(Apache-2.0) for glyph-name decoding, and character tables for Adobe's
+Chinese, Japanese, and Korean collections derived from
+[cmap-resources](https://github.com/adobe-type-tools/cmap-resources)
+(BSD-3-Clause; see `internal/cjk/data/NOTICE`).
