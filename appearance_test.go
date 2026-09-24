@@ -157,3 +157,22 @@ func TestButtonMarksRegenerated(t *testing.T) {
 		t.Errorf("text = %q, want %q", got, want)
 	}
 }
+
+// TestListBoxScroll: a list box drawn from its field shows the options a
+// viewer shows — from its top index, /TI, where it has been scrolled, or
+// else from the topmost selected option when the box would hide it.
+func TestListBoxScroll(t *testing.T) {
+	opts := "/Opt [(Alpha) (Beta) (Gamma) (Delta) (Epsilon)] /DA (/Helv 10 Tf 0 g)"
+	doc := annotatedDoc(
+		"<< /Type /Annot /Subtype /Widget /FT /Ch /TI 3 "+opts+" /Rect [300 660 400 686] >>",
+		"<< /Type /Annot /Subtype /Widget /FT /Ch /V [(Epsilon) (Gamma)] "+opts+" /Rect [300 560 400 586] >>",
+		"<< /Type /Annot /Subtype /Widget /FT /Ch /V (Beta) "+opts+" /Rect [300 460 400 486] >>",
+	)
+	d, err := extractOptions(t, doc, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := d.Text(), "Name:\nDelta\nEpsilon\nGamma\nDelta\nAlpha\nBeta"; got != want {
+		t.Errorf("text = %q, want %q", got, want)
+	}
+}
