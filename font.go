@@ -382,7 +382,7 @@ func sequentialGlyphNames(arr object.Value) bool {
 			n, _ := el.Int64()
 			code = int(n)
 		case object.Name:
-			if code >= 0 && code < 0x20 && el.Name() == "a"+strconv.Itoa(code) {
+			if code >= 0 && code < len(control) && el.Name() == "a"+strconv.Itoa(code) {
 				control[code] = true
 			}
 			code++
