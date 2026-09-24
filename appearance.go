@@ -73,7 +73,14 @@ func (w *walker) walkAppearances(pageNode object.Value, pageResources object.Val
 			return w.warning(WarningWorkLimit, errors.New("form XObject nesting exceeds limit"))
 		}
 		w.depth++
+		num, numbered := appearance.ObjectNumber()
+		if numbered {
+			w.forms = append(w.forms, num)
+		}
 		err := w.walkStream(appearance, resources, gstate{ctm: ctm, hscale: 1})
+		if numbered {
+			w.forms = w.forms[:len(w.forms)-1]
+		}
 		w.depth--
 		if err != nil {
 			return err
