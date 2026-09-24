@@ -76,18 +76,29 @@ func New(c Config) (*Decryptor, error) {
 
 // NewWithPassword authenticates password as either the user or owner password
 // and derives the file key.
+//
+// A document whose crypt filters leave strings and streams unencrypted
+// (both /StmF and /StrF Identity) encrypts only its embedded files, under
+// /EFF. Its content needs no key, so it opens without the password.
 func NewWithPassword(c Config, password []byte) (*Decryptor, error) {
 	if c.Filter != "" && c.Filter != "Standard" {
 		return nil, fmt.Errorf("pdf: unsupported security handler /%s", c.Filter)
 	}
+	var d *Decryptor
+	var err error
 	switch {
 	case c.V >= 5 || c.R >= 5:
-		return newAES256(c, password)
+		d, err = newAES256(c, password)
 	case c.V >= 1 && c.V <= 4:
-		return newRC4orAES(c, password)
+		d, err = newRC4orAES(c, password)
 	default:
 		return nil, fmt.Errorf("pdf: unsupported /Encrypt version V=%d R=%d", c.V, c.R)
 	}
+	if errors.Is(err, ErrPasswordRequired) && c.V >= 4 &&
+		methodForFilter(c, c.StmF) == Identity && methodForFilter(c, c.StrF) == Identity {
+		return &Decryptor{stmF: Identity, strF: Identity}, nil
+	}
+	return d, err
 }
 
 // DecryptString decrypts a literal or hex string found in object (num,gen).
