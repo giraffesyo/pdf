@@ -375,6 +375,9 @@ func (e *pageExtractor) extract(state *pageState, pageNode object.Value, pageNum
 	}
 	res := object.Inherited(pageNode, "Resources")
 	err := w.walkStream(pageNode.Key("Contents"), res, gstate{ctm: identity, hscale: 1})
+	if err == nil && !e.opts.IgnoreAnnotationAppearances {
+		err = w.walkAppearances(pageNode, res)
+	}
 	if errors.Is(err, errStopPage) {
 		err = nil
 	}

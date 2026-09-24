@@ -1,22 +1,22 @@
 {
   "adivorciar": {
-    "bytes": 353943,
+    "bytes": 354140,
     "allocs": 2191
   },
   "alice-fr": {
-    "bytes": 1141856,
-    "allocs": 4122
+    "bytes": 1176344,
+    "allocs": 4864
   },
   "downmark-synthetic": {
-    "bytes": 107473,
+    "bytes": 107521,
     "allocs": 590
   },
   "markitdown-test": {
-    "bytes": 1647365,
-    "allocs": 6201
+    "bytes": 1700634,
+    "allocs": 7370
   },
   "runc-security-audit": {
-    "bytes": 7005778,
-    "allocs": 47538
+    "bytes": 7198421,
+    "allocs": 52240
   }
 }

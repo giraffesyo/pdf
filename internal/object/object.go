@@ -83,6 +83,15 @@ type Value struct {
 	owner ref // object this value was parsed from, for decryption context
 }
 
+// Trailer returns the trailer of the file v belongs to, resolved through
+// the same Reader as v — a clone's value reaches the clone's trailer.
+func (v Value) Trailer() Value {
+	if v.r == nil {
+		return Value{}
+	}
+	return v.r.Trailer()
+}
+
 // ObjectNumber returns the indirect object number represented by v. Direct
 // values have no object number.
 func (v Value) ObjectNumber() (int, bool) {
