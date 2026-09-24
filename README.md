@@ -23,7 +23,10 @@ glyphs := page.Glyphs          // text, origin, advance, direction, size; Baseli
 `Page.Text` reconstructs reading order from direction-aware glyph baselines,
 and word boundaries are recovered from glyph gaps and font metrics — so PDFs
 that encode no space characters at all still come out readable. Rotated and
-vertical runs retain their reading direction. Arabic and Hebrew, which PDFs
+vertical runs retain their reading direction. Side-by-side columns — journal
+papers, newsletters, fact sheets — read one after another, with titles,
+full-width figures and text below the columns in their places, while
+tables keep their rows. Arabic and Hebrew, which PDFs
 paint in visual order, read back in logical order, with numbers and
 embedded left-to-right words in place (the Unicode Bidirectional
 Algorithm's reordering, applied in reverse). `Page.TextIn` and
@@ -196,9 +199,11 @@ searchable.
   no text to extract unless the caller supplies an `OCR` implementation
   (see [Images and OCR](#images-and-ocr)). The package does not rasterize
   pages, so outlined text needs an external renderer.
-- Layout reconstruction is heuristic. Direction-aware, content-order, and
-  column modes are available, but highly irregular tables may still require
-  application-specific analysis of glyph quads.
+- Layout reconstruction is heuristic. Column detection reads prose columns
+  in order and keeps tables in rows, but irregular layouts — tables of
+  sentences, text wrapped around figures — may still need
+  application-specific analysis of glyph quads; `LayoutColumns` forces
+  column reading and `LayoutContentOrder` keeps the stream's order.
 - `Identity-H` and `Identity-V` CMaps are built in. Other named predefined
   CMaps are loaded through `Options.CMapResolver`; embedded CMap streams and
   `usecmap` inheritance are parsed natively.

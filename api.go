@@ -140,13 +140,20 @@ func (l Limits) validate() error {
 type LayoutMode uint8
 
 const (
-	// LayoutPosition groups glyphs using their geometric baselines.
+	// LayoutPosition groups glyphs into lines by their geometric
+	// baselines and reads the page top to bottom, and side-by-side
+	// columns of prose one after another: a band of lines split by a
+	// common gutter reads column by column when a column holds prose,
+	// while tables, whose short cells share every row, read row by row.
+	// Text spanning the columns — a title, a full-width figure caption —
+	// ends the band and reads in its place.
 	LayoutPosition LayoutMode = iota
 	// LayoutContentOrder preserves the order in which glyphs occur in content
 	// streams, inserting line breaks only when the baseline changes.
 	LayoutContentOrder
-	// LayoutColumns separates wide horizontal gaps into column regions and
-	// reads each column from top to bottom.
+	// LayoutColumns reads every band of lines split by a common gutter
+	// column by column, tables included: LayoutPosition's column reading
+	// without its test for prose.
 	LayoutColumns
 )
 

@@ -29,11 +29,7 @@ func reconstructPositionText(page Page, layout LayoutOptions) string {
 		return ""
 	}
 	lines := buildLayoutLines(page.Glyphs, layout.KeepDuplicateGlyphs)
-	if layout.Mode == LayoutColumns {
-		lines = orderColumns(lines, page.CropBox)
-	} else {
-		slices.SortStableFunc(lines, compareLayoutLines)
-	}
+	lines = readingOrder(lines, layout.Mode == LayoutColumns)
 
 	var b strings.Builder
 	for _, line := range lines {
@@ -434,77 +430,6 @@ func glyphProjection(g Glyph, dir Point, end bool) float64 {
 }
 
 func dotPoint(a, b Point) float64 { return a.X*b.X + a.Y*b.Y }
-
-func orderColumns(lines []layoutLine, box Rect) []layoutLine {
-	var fragments []layoutLine
-	for _, line := range lines {
-		if math.Abs(line.dir.Y) > 0.25 || len(line.glyphs) < 2 {
-			fragments = append(fragments, line)
-			continue
-		}
-		start := 0
-		for i := 1; i < len(line.glyphs); i++ {
-			prev := line.glyphs[i-1]
-			current := line.glyphs[i]
-			gap := glyphProjection(*current.Glyph, line.dir, false) -
-				glyphProjection(*prev.Glyph, line.dir, true)
-			size := max(prev.Size, current.Size)
-			threshold := max(4*max(size, 1), 0.04*(box.MaxX-box.MinX))
-			if gap > threshold {
-				fragments = append(fragments, lineFragment(line, start, i))
-				start = i
-			}
-		}
-		fragments = append(fragments, lineFragment(line, start, len(line.glyphs)))
-	}
-
-	type column struct {
-		lines []layoutLine
-		x     float64
-	}
-	type horizontalLine struct {
-		line layoutLine
-		x    float64
-		tol  float64
-	}
-	var horizontal []horizontalLine
-	var other []layoutLine
-	for _, line := range fragments {
-		if math.Abs(line.dir.Y) > 0.25 || len(line.glyphs) == 0 {
-			other = append(other, line)
-			continue
-		}
-		x := line.glyphs[0].X
-		tol := 2 * max(line.glyphs[0].Size, 1)
-		horizontal = append(horizontal, horizontalLine{line: line, x: x, tol: tol})
-	}
-	slices.SortStableFunc(horizontal, func(a, b horizontalLine) int {
-		switch {
-		case a.x < b.x:
-			return -1
-		case a.x > b.x:
-			return 1
-		default:
-			return a.line.first - b.line.first
-		}
-	})
-	var columns []column
-	for _, item := range horizontal {
-		if len(columns) == 0 || math.Abs(columns[len(columns)-1].x-item.x) > item.tol {
-			columns = append(columns, column{x: item.x, lines: []layoutLine{item.line}})
-		} else {
-			last := len(columns) - 1
-			columns[last].lines = append(columns[last].lines, item.line)
-		}
-	}
-	ordered := make([]layoutLine, 0, len(fragments))
-	for _, column := range columns {
-		slices.SortStableFunc(column.lines, compareLayoutLines)
-		ordered = append(ordered, column.lines...)
-	}
-	slices.SortStableFunc(other, compareLayoutLines)
-	return append(ordered, other...)
-}
 
 func lineFragment(line layoutLine, start, end int) layoutLine {
 	line.glyphs = line.glyphs[start:end]
