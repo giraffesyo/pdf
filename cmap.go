@@ -66,6 +66,15 @@ func identityCMap(vertical bool) *cmapData {
 // parseToUnicode reads a /ToUnicode CMap stream. Codespace ranges are retained
 // so composite-font strings can be split into variable-width character codes.
 func parseToUnicode(v object.Value, resolver CMapResolver, streamLimit int) (*cmapData, error) {
+	if v.Kind() == object.Name {
+		// Not a CMap stream, but some producers name Identity-H here to
+		// say the codes are UCS-2; poppler reads it so.
+		switch v.Name() {
+		case "Identity-H", "Identity-V":
+			return &cmapData{spaces: []codeSpace{{low: 0, high: 0xffff, bytes: 2}}, unicodeForm: unicodeUTF16}, nil
+		}
+		return nil, nil
+	}
 	if v.Kind() != object.Stream {
 		return nil, nil
 	}

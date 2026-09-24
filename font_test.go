@@ -97,3 +97,42 @@ func TestUnicodePredefinedCMaps(t *testing.T) {
 		}
 	}
 }
+
+// TestCIDFallbacks: with no ToUnicode and no cmap in the font, a font in
+// an Adobe CJK collection still reads its roman CIDs 1–95 — Adobe-Japan1's
+// with the yen sign — but only when its Encoding CMap gave the CIDs; and a
+// ToUnicode named Identity-H, which some producers write for UCS-2 codes,
+// reads the codes as UCS-2.
+func TestCIDFallbacks(t *testing.T) {
+	text := func(encoding, toUnicode, ordering, codes string) string {
+		t.Helper()
+		doc := pdftest.Build(1,
+			pdftest.Catalog(2),
+			pdftest.Pages(3),
+			pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+			pdftest.Stream("", "BT /F1 10 Tf 72 700 Td "+codes+" Tj ET"),
+			"<< /Type /Font /Subtype /Type0 /BaseFont /Synthetic /Encoding /"+encoding+toUnicode+" /DescendantFonts [6 0 R] >>",
+			"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Synthetic /DW 500 "+
+				"/CIDSystemInfo << /Registry (Adobe) /Ordering ("+ordering+") /Supplement 2 >> >>",
+		)
+		var b strings.Builder
+		for _, g := range extract(t, doc) {
+			b.WriteString(g.Text)
+		}
+		return b.String()
+	}
+	// CIDs 41 42 1 61 25: "Hi ¥9" in Adobe-Japan1's roman set.
+	if got := text("Identity-H", "", "Japan1", "<0029004A0001003D001A>"); got != "Hi ¥9" {
+		t.Errorf("Japan1 roman CIDs = %q", got)
+	}
+	if got := text("Identity-H", "", "GB1", "<0029004A0001003D>"); got != `Hi \` {
+		t.Errorf("GB1 roman CIDs = %q", got)
+	}
+	// An Encoding CMap that cannot be read leaves the CIDs unknown.
+	if got := text("90ms-RKSJ-H", "", "Japan1", "<48>"); got != "" {
+		t.Errorf("unresolved encoding = %q, want nothing", got)
+	}
+	if got := text("Identity-H", " /ToUnicode /Identity-H", "Identity", "<004100720069>"); got != "Ari" {
+		t.Errorf("ToUnicode /Identity-H = %q", got)
+	}
+}

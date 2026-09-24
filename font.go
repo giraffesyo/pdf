@@ -50,6 +50,11 @@ type fontInfo struct {
 	cidWidths map[uint32]float64 // composite fonts
 	defWidth  float64
 
+	// asciiCIDs is set for a font in an Adobe CJK collection, whose CIDs
+	// 1–95 read as its roman characters when nothing else maps them.
+	asciiCIDs  bool
+	japanRoman bool // Adobe-Japan1's JIS roman set
+
 	vertical    bool
 	cidVertical map[uint32]verticalMetric
 	defVertical verticalMetric
@@ -138,6 +143,7 @@ func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontI
 		if err != nil {
 			f.warnings = append(f.warnings, err)
 		}
+		cidsKnown := err == nil && f.encoding != nil
 		if f.encoding == nil {
 			if f.toUni != nil && len(f.toUni.spaces) > 0 {
 				f.encoding = &cmapData{
@@ -151,6 +157,19 @@ func newFontInfo(fv object.Value, resolver CMapResolver, streamLimit int) *fontI
 		f.vertical = f.encoding.wmode == 1
 		desc := fv.Key("DescendantFonts").Index(0)
 		if desc.Kind() == object.Dict {
+			// The Adobe CJK collections all place printable ASCII at CIDs
+			// 1–95: the one part of them readable without their tables.
+			info := desc.Key("CIDSystemInfo")
+			// Only when the codes' CIDs are known: an Encoding CMap that
+			// could not be read leaves them as raw codes.
+			if cidsKnown && objectText(info.Key("Registry")) == "Adobe" {
+				switch objectText(info.Key("Ordering")) {
+				case "Japan1":
+					f.asciiCIDs, f.japanRoman = true, true
+				case "GB1", "CNS1", "Korea1":
+					f.asciiCIDs = true
+				}
+			}
 			if dw, ok := desc.Key("DW").Float64(); ok {
 				f.defWidth = dw
 			}
@@ -553,11 +572,33 @@ func (f *fontInfo) mapComposite(key codeKey, cid uint32) string {
 		if s, ok := f.toUni.unicode[key]; ok && sanitizeText(s, false) != "" {
 			return s
 		}
+		if f.toUni.unicodeForm != notUnicode && key.bytes == 2 {
+			if s := string(f.toUni.unicodeText(key)); sanitizeText(s, false) != "" {
+				return s // a ToUnicode named Identity-H: the code is UCS-2
+			}
+		}
 	}
 	if s := f.embeddedText(cid); s != "" {
 		return s
 	}
+	if f.asciiCIDs && cid >= 1 && cid <= 95 {
+		return cjkRomanText(cid, f.japanRoman)
+	}
 	return "�"
+}
+
+// cjkRomanText is the character of CID 1–95 in an Adobe CJK collection:
+// printable ASCII, in the order of its codes from the space — except in
+// Adobe-Japan1, whose roman set is JIS X 0201's, with the yen sign and
+// overline where ASCII has the backslash and tilde.
+func cjkRomanText(cid uint32, japan bool) string {
+	switch {
+	case japan && cid == 61:
+		return "¥"
+	case japan && cid == 95:
+		return "‾"
+	}
+	return string(rune(0x1f + cid))
 }
 
 // embeddedText returns the font program's hint for code, parsing the
