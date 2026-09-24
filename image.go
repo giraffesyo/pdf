@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/jpeg"
 	"io"
 	"math"
 
 	"github.com/giraffesyo/pdf/internal/codec/ccitt"
+	"github.com/giraffesyo/pdf/internal/codec/dct"
 	"github.com/giraffesyo/pdf/internal/codec/jbig2"
 	"github.com/giraffesyo/pdf/internal/filter"
+	"github.com/giraffesyo/pdf/internal/function"
 	"github.com/giraffesyo/pdf/internal/object"
 	"github.com/giraffesyo/pdf/internal/safeio"
 )
@@ -110,8 +111,11 @@ func (im Image) Bounds() Rect {
 
 // Decode returns the image's pixels. Unpacked samples in the Device, Cal,
 // ICCBased, Indexed and single-colorant Separation and DeviceN spaces, and
-// image masks, decode at 1, 2, 4, 8 or 16 bits per component; DCTDecode
-// decodes through image/jpeg; CCITTFaxDecode and JBIG2Decode (generic,
+// image masks, decode at 1, 2, 4, 8 or 16 bits per component; an Indexed
+// palette over a Separation or DeviceN space decodes in its printed colour,
+// through the space's tint transform. DCTDecode decodes through
+// image/jpeg, including CMYK data without the Adobe marker image/jpeg
+// expects; CCITTFaxDecode and JBIG2Decode (generic,
 // symbol and text regions with arithmetic coding) decode natively to
 // one-bit grey. Other colour spaces, JPXDecode, and JBIG2 features outside
 // that subset return an error wrapping errors.ErrUnsupported. An image
@@ -185,14 +189,14 @@ func (im Image) decodeBilevel(bits []byte, rows int) (image.Image, error) {
 }
 
 func (im Image) decodeJPEG() (image.Image, error) {
-	cfg, err := jpeg.DecodeConfig(bytes.NewReader(im.Data))
+	cfg, err := dct.DecodeConfig(im.Data)
 	if err != nil {
 		return nil, fmt.Errorf("pdf: decode DCTDecode image: %w", err)
 	}
 	if limit := im.maxPixels; limit > 0 && cfg.Height > 0 && cfg.Width > limit/cfg.Height {
 		return nil, fmt.Errorf("%w: %d×%d", ErrImageTooLarge, cfg.Width, cfg.Height)
 	}
-	img, err := jpeg.Decode(bytes.NewReader(im.Data))
+	img, err := dct.Decode(im.Data)
 	if err != nil {
 		return nil, fmt.Errorf("pdf: decode DCTDecode image: %w", err)
 	}
@@ -423,6 +427,14 @@ type colorSpace struct {
 	family  string
 	ncomp   int
 	palette *indexedPalette
+	tint    *tintTransform // a palette's Separation or DeviceN base, when the function parses
+}
+
+// tintTransform maps a Separation or DeviceN space's colorant tints to its
+// alternate space.
+type tintTransform struct {
+	alt colorSpace
+	fn  *function.Function
 }
 
 // resolveColorSpace interprets a /ColorSpace value. Named resources are
@@ -468,7 +480,9 @@ func resolveColorSpace(v, resources object.Value, depth int) colorSpace {
 		case "DeviceN":
 			return colorSpace{family: family, ncomp: max(v.Index(1).Len(), 1)}
 		case "Indexed", "I":
-			return indexedColorSpace(resolveColorSpace(v.Index(1), resources, depth+1), v.Index(2), v.Index(3))
+			base := resolveColorSpace(v.Index(1), resources, depth+1)
+			base.tint = resolveTint(v.Index(1), resources, base, depth+1)
+			return indexedColorSpace(base, v.Index(2), v.Index(3))
 		case "Pattern":
 			return colorSpace{family: family, ncomp: 1}
 		case "DeviceGray", "DeviceRGB", "DeviceCMYK", "G", "RGB", "CMYK":
@@ -494,6 +508,35 @@ func deviceColorSpace(name string) (colorSpace, bool) {
 	return colorSpace{}, false
 }
 
+// resolveTint reads the tint transform of v, the Separation or DeviceN
+// space cs resolved from, directly or by name: [/Separation name alternate
+// tintTransform] or [/DeviceN names alternate tintTransform …]. Only
+// palettes use it, so only they pay to parse it. It returns nil when the
+// alternate space or the function is unusable; the space then decodes as
+// it would without one, a colorant's tint as darkness.
+func resolveTint(v, resources object.Value, cs colorSpace, depth int) *tintTransform {
+	if cs.family != "Separation" && cs.family != "DeviceN" || depth > 4 {
+		return nil
+	}
+	if v.Kind() == object.Name {
+		v = resources.Key("ColorSpace").Key(v.Name())
+	}
+	if v.Kind() != object.Array {
+		return nil
+	}
+	alt := resolveColorSpace(v.Index(2), resources, depth+1)
+	switch alt.family {
+	case "DeviceGray", "CalGray", "DeviceRGB", "CalRGB", "DeviceCMYK", "ICCBased":
+	default:
+		return nil // Lab, nested special spaces: not something a palette decodes to
+	}
+	fn, err := function.Parse(v.Index(3))
+	if err != nil || fn.Inputs() != cs.ncomp || fn.Outputs() != alt.ncomp {
+		return nil
+	}
+	return &tintTransform{alt: alt, fn: fn}
+}
+
 // maxPaletteBytes bounds an Indexed lookup table: 256 entries of at most
 // 32 components, far beyond anything real.
 const maxPaletteBytes = 256 * 32
@@ -507,7 +550,35 @@ func indexedColorSpace(base colorSpace, hival, lookup object.Value) colorSpace {
 	case object.Stream:
 		pal.lookup, _ = readStreamBoundedLimitError(lookup, maxPaletteBytes)
 	}
+	pal.applyTint()
 	return colorSpace{family: "Indexed", ncomp: 1, palette: pal}
+}
+
+// applyTint rewrites a palette over a Separation or DeviceN space as one
+// over its alternate space, running each entry through the tint
+// transform: a spot colour's palette then decodes in its printed colour.
+func (pal *indexedPalette) applyTint() {
+	t := pal.base.tint
+	if t == nil {
+		return
+	}
+	n, m := pal.base.ncomp, t.alt.ncomp
+	entries := pal.hival + 1
+	in, out := make([]float64, n), make([]float64, m)
+	lookup := make([]byte, 0, entries*m)
+	for i := range entries {
+		for c := range n {
+			in[c] = 0
+			if j := i*n + c; j < len(pal.lookup) {
+				in[c] = float64(pal.lookup[j]) / 255
+			}
+		}
+		t.fn.Eval(in, out)
+		for _, x := range out {
+			lookup = append(lookup, byte(math.Round(max(0, min(x, 1))*255)))
+		}
+	}
+	pal.base, pal.lookup = t.alt, lookup
 }
 
 // colorSpaceFromOperand interprets an inline image's /CS operand: a
@@ -523,6 +594,9 @@ func colorSpaceFromOperand(op operand, resources object.Value) colorSpace {
 	case opArr:
 		if len(op.arr) == 4 && op.arr[0].kind == opName && (op.arr[0].name == "I" || op.arr[0].name == "Indexed") {
 			base := colorSpaceFromOperand(op.arr[1], resources)
+			if op.arr[1].kind == opName {
+				base.tint = resolveTint(resources.Key("ColorSpace").Key(op.arr[1].name), object.Value{}, base, 1)
+			}
 			n := 0
 			if op.arr[2].kind == opNum {
 				n = int(op.arr[2].num)
@@ -531,6 +605,7 @@ func colorSpaceFromOperand(op operand, resources object.Value) colorSpace {
 			if op.arr[3].kind == opStr {
 				pal.lookup = op.arr[3].str
 			}
+			pal.applyTint()
 			return colorSpace{family: "Indexed", ncomp: 1, palette: pal}
 		}
 		if len(op.arr) == 1 && op.arr[0].kind == opName {

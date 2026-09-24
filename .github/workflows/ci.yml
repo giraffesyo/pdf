@@ -67,6 +67,8 @@ jobs:
         run: go test -run '^$' -fuzz '^FuzzReader$' -fuzztime 60s ./internal/object
       - name: fuzz ExtractImages 60s
         run: go test -run '^$' -fuzz '^FuzzExtractImages$' -fuzztime 60s .
+      - name: fuzz Calculator 30s
+        run: go test -run '^$' -fuzz '^FuzzCalculator$' -fuzztime 30s ./internal/function
 
   benchmarks:
     runs-on: ubuntu-latest
