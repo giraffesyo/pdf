@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/giraffesyo/pdf/pdftest"
 )
 
 // documentShape is everything a caller can observe about an extraction,
@@ -211,6 +213,36 @@ func TestDocumentTextMatchesPerPageText(t *testing.T) {
 		}
 		if got := doc.Text(); got != want.String() {
 			t.Errorf("Document.Text differs from the pages joined sequentially (%d vs %d bytes)", len(got), want.Len())
+		}
+	}
+}
+
+// TestConcurrentInlinePages: page dictionaries written inline in /Kids
+// have no object number; each worker must still resolve them through its
+// own reader, not the shared one another worker's page is filling. Run
+// with -race.
+func TestConcurrentInlinePages(t *testing.T) {
+	var kids strings.Builder
+	for i := range 16 {
+		fmt.Fprintf(&kids, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "+
+			"/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >> ", 4+i)
+	}
+	objs := []string{
+		pdftest.Catalog(2),
+		"<< /Type /Pages /Kids [" + kids.String() + "] /Count 16 >>",
+		pdftest.Helvetica(),
+	}
+	for i := range 16 {
+		objs = append(objs, pdftest.Stream("", fmt.Sprintf("BT /F1 12 Tf 72 700 Td (page %d) Tj ET", i+1)))
+	}
+	doc := pdftest.Build(1, objs...)
+	d, err := ExtractWithOptions(t.Context(), bytes.NewReader(doc), int64(len(doc)), Options{Concurrency: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range d.Pages {
+		if got, want := p.Text(), fmt.Sprintf("page %d", i+1); got != want {
+			t.Errorf("page %d text = %q", i+1, got)
 		}
 	}
 }
