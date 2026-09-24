@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.0](https://github.com/giraffesyo/pdf/compare/v0.6.0...v0.7.0) (2026-09-24)
+
+
+### Features
+
+* include annotation and form-field text in page text ([#43](https://github.com/giraffesyo/pdf/issues/43)) ([5ae181b](https://github.com/giraffesyo/pdf/commit/5ae181b09112c17e55ce1dc0a569433fab44ef71))
+
+
+### Bug Fixes
+
+* drop lines that hold only space glyphs ([#45](https://github.com/giraffesyo/pdf/issues/45)) ([773bf8a](https://github.com/giraffesyo/pdf/commit/773bf8ab191101e79a4777c12ced97cef2777d90))
+* grow the object parse window when an object outruns it ([#38](https://github.com/giraffesyo/pdf/issues/38)) ([91cc762](https://github.com/giraffesyo/pdf/commit/91cc7626f4cd7df7cf18e269c505d783f23beb45))
+* open documents that encrypt only their attachments ([#41](https://github.com/giraffesyo/pdf/issues/41)) ([0335d6f](https://github.com/giraffesyo/pdf/commit/0335d6f4dc45fbc92125886f7b5b10736b319ecb))
+* read repainted text once and keep overlaid runs apart ([#39](https://github.com/giraffesyo/pdf/issues/39)) ([230b372](https://github.com/giraffesyo/pdf/commit/230b3729f0cc5d6860351e6e1b6f2f417b574619))
+* read right-to-left text in logical order ([#40](https://github.com/giraffesyo/pdf/issues/40)) ([4dcb815](https://github.com/giraffesyo/pdf/commit/4dcb8151ded9b62406ffd9df007cb4275b968bcf))
+* recover page trees behind a misleading cross-reference table ([#42](https://github.com/giraffesyo/pdf/issues/42)) ([fb3d7e3](https://github.com/giraffesyo/pdf/commit/fb3d7e3803caa3338a40a9d01e8387f1343f8af8))
+
 ## [0.6.0](https://github.com/giraffesyo/pdf/compare/v0.5.0...v0.6.0) (2026-08-21)
 
 
