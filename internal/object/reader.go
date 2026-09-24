@@ -279,7 +279,16 @@ func (r *Reader) parseIndirect(buf []byte, base int64, wantNum, wantGen int) (ob
 
 	// A stream follows when the next keyword is "stream".
 	save := lex.pos
-	if t := lex.next(); t.kind == tokKeyword && t.str == "stream" {
+	t := lex.next()
+	// The parser closes open arrays and dictionaries at the end of its
+	// input, as a truncated file needs, so a window ending inside the
+	// object parses as a shorter, complete one. Only a lookahead that ends
+	// inside the window — with room for the EOL after "stream" — shows
+	// the object ended there.
+	if lex.pos+2 > len(buf) && int64(len(buf)) < r.size-base {
+		return nil, 0, false, errNeedMore
+	}
+	if t.kind == tokKeyword && t.str == "stream" {
 		d, ok := val.(dict)
 		if !ok {
 			return nil, 0, false, fmt.Errorf("pdf: object %d: stream without dict", wantNum)
