@@ -36,7 +36,9 @@ func reconstructPositionText(page Page, layout LayoutOptions) string {
 			return !lineOnPage(line, page.MediaBox)
 		})
 	}
-	lines = readingOrder(lines, layout.Mode == LayoutColumns)
+	sc, _ := orderScratchPool.Get().(*orderScratch)
+	defer putOrderScratch(sc)
+	lines = readingOrder(lines, layout.Mode == LayoutColumns, sc)
 
 	var b strings.Builder
 	for _, line := range lines {

@@ -188,8 +188,7 @@ func extractDocument(
 	}
 	pageNodes, err := listPages(reader)
 	var cycled error // a page-tree cycle skipped around the pages kept
-	var skipped *cycleWarning
-	if errors.As(err, &skipped) {
+	if _, skipped := err.(*cycleWarning); skipped {
 		cycled, err = err, nil
 	}
 	var repaired error // why the cross-reference table was rebuilt
