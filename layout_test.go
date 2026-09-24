@@ -100,6 +100,17 @@ func TestLayoutWhitespace(t *testing.T) {
 		t.Errorf("trimmed text = %q", got)
 	}
 
+	// A line of space glyphs alone writes nothing, not an empty line.
+	page = Page{Glyphs: concat(
+		run("  ", 10, 120, 6, 10),
+		run("title", 10, 100, 6, 10),
+		run("   ", 10, 80, 6, 10),
+		run("body", 10, 60, 6, 10),
+	)}
+	if got := page.Text(); got != "title\nbody" {
+		t.Errorf("text around blank lines = %q", got)
+	}
+
 	title := run("GATEWAY", 100, 725.94, 20, 28)
 	stray := Glyph{Text: " ", X: 179, Y: 724.08, Advance: 3, Size: 11} // inside "W"
 	page = Page{Glyphs: append([]Glyph{stray}, title...)}
