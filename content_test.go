@@ -209,3 +209,42 @@ func TestPlainNumberMatchesStrconv(t *testing.T) {
 		}
 	}
 }
+
+// TestType3Fonts: a Type3 font's widths and em follow its FontMatrix,
+// not the 1/1000 scale of other fonts, and its codes read through glyph
+// names — standard ones, dvips's code-numbered /aNN, or a base encoding
+// the font states — though never through raw codes.
+func TestType3Fonts(t *testing.T) {
+	font := "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 50 50] /FontMatrix [1 0 0 1 0 0] " +
+		"/CharProcs << >> /Encoding << /Differences [72 /H 105 /a105 33 /exclam] >> " +
+		"/FirstChar 33 /LastChar 105 /Widths [" + strings.Repeat("25 ", 73) + "] >>"
+	doc := pdftest.Build(1,
+		pdftest.Catalog(2),
+		pdftest.Pages(3),
+		pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+		pdftest.Stream("", `BT /F1 0.24 Tf 72 700 Td (Hi!) Tj ET`),
+		font,
+	)
+	glyphs := extract(t, doc)
+	if len(glyphs) != 3 || glyphs[0].Text+glyphs[1].Text+glyphs[2].Text != "Hi!" {
+		t.Fatalf("glyphs = %v", glyphs)
+	}
+	// Width 25 × FontMatrix 1 × size 0.24 = 6; the em is the 50-unit
+	// bounding box, 12.
+	if g := glyphs[1]; math.Abs(g.Advance-6) > 1e-9 || math.Abs(g.Size-12) > 1e-9 || math.Abs(g.X-78) > 1e-9 {
+		t.Errorf("glyph i: X %v advance %v size %v, want 78, 6, 12", g.X, g.Advance, g.Size)
+	}
+
+	based := strings.Replace(font, "/Differences [72 /H 105 /a105 33 /exclam]",
+		"/BaseEncoding /WinAnsiEncoding /Differences [72 /Q7 105 /Z9]", 1)
+	doc = pdftest.Build(1,
+		pdftest.Catalog(2),
+		pdftest.Pages(3),
+		pdftest.Page(2, 4, "<< /Font << /F1 5 0 R >> >>"),
+		pdftest.Stream("", `BT /F1 0.24 Tf 72 700 Td (Hi!) Tj ET`),
+		based,
+	)
+	if got := lineText(extract(t, doc)); len(got) != 1 || got[0] != "Hi!" {
+		t.Errorf("stated base encoding: lines = %q", got)
+	}
+}
