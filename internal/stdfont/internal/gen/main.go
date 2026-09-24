@@ -91,7 +91,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join("internal", "stdfont", "widths.go"), src, 0o600); err != nil { //nolint:gosec // a fixed path in the repository
+	if err := os.WriteFile(filepath.Join("internal", "stdfont", "widths.go"), src, 0o600); err != nil {
 		log.Fatal(err)
 	}
 }

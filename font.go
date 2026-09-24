@@ -373,7 +373,7 @@ func numberedGlyphNames(arr object.Value, differences map[byte]string) map[byte]
 // numbered glyph. dvips lists only the characters a document uses, which
 // never fill all of them.
 func sequentialGlyphNames(arr object.Value) bool {
-	var control [0x20]bool
+	var control uint32 // bit c: code c holds /ac
 	code := -1
 	for i := range arr.Len() {
 		el := arr.Index(i)
@@ -382,18 +382,13 @@ func sequentialGlyphNames(arr object.Value) bool {
 			n, _ := el.Int64()
 			code = int(n)
 		case object.Name:
-			if code >= 0 && code < len(control) && el.Name() == "a"+strconv.Itoa(code) {
-				control[code] = true
+			if code >= 0 && code < 0x20 && el.Name() == "a"+strconv.Itoa(code) {
+				control |= 1 << code
 			}
 			code++
 		}
 	}
-	for _, numbered := range control {
-		if !numbered {
-			return false
-		}
-	}
-	return true
+	return control == 1<<0x20-1
 }
 
 func numberedGlyphText(name string, code int) string {
