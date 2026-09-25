@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.8.0](https://github.com/giraffesyo/pdf/compare/v0.7.0...v0.8.0) (2026-09-25)
+
+
+### Features
+
+* decode JPEG 2000 images ([#67](https://github.com/giraffesyo/pdf/issues/67)) ([beacffd](https://github.com/giraffesyo/pdf/commit/beacffd73a61cd04f35a308d0529cf7b91fca2fb))
+* read Adobe CJK collections' CIDs through built-in tables ([#56](https://github.com/giraffesyo/pdf/issues/56)) ([dd67413](https://github.com/giraffesyo/pdf/commit/dd6741323a6700a446bca60d4b678bb7a7770d66))
+* read side-by-side columns in order by default ([#47](https://github.com/giraffesyo/pdf/issues/47)) ([eb75197](https://github.com/giraffesyo/pdf/commit/eb751972c199f07b248a2d4427d80f1d9b748a73))
+* read the predefined Unicode CMaps without a resolver ([#51](https://github.com/giraffesyo/pdf/issues/51)) ([358401a](https://github.com/giraffesyo/pdf/commit/358401a37a2b059236ce10007c1f5d725a58b907))
+
+
+### Bug Fixes
+
+* break words at poppler's 0.1 em gap, and keep kerned-over spaces ([#52](https://github.com/giraffesyo/pdf/issues/52)) ([1ea99b1](https://github.com/giraffesyo/pdf/commit/1ea99b11dc212b4d3b274bd25605df6492ebb744))
+* decode spot-colour palettes and CMYK JPEGs without an Adobe marker ([#66](https://github.com/giraffesyo/pdf/issues/66)) ([7503ec7](https://github.com/giraffesyo/pdf/commit/7503ec7a33c4201e3509103385618c599b6d3e7b))
+* derive R6 keys to the spec, and recover checksum and page-tree damage ([#50](https://github.com/giraffesyo/pdf/issues/50)) ([09f3b58](https://github.com/giraffesyo/pdf/commit/09f3b58ab8e73d18adea8472f99ce68e9bc487e9))
+* draw a Form XObject that draws itself only once ([#55](https://github.com/giraffesyo/pdf/issues/55)) ([0caf7e4](https://github.com/giraffesyo/pdf/commit/0caf7e4c392aa749e6a321192b4d25f7eed450b2))
+* draw checkbox and radio marks, and the fonts forms name without supplying ([#57](https://github.com/giraffesyo/pdf/issues/57)) ([b0cc441](https://github.com/giraffesyo/pdf/commit/b0cc441a1e0b8c5162fd46a2c853a084d19ece78))
+* keep concurrent page workers off each other's readers ([#61](https://github.com/giraffesyo/pdf/issues/61)) ([23b0531](https://github.com/giraffesyo/pdf/commit/23b05312147026b19c0dff18718e80928d331fc2))
+* keep superscripts and subscripts on their line ([#59](https://github.com/giraffesyo/pdf/issues/59)) ([601d667](https://github.com/giraffesyo/pdf/commit/601d667ae7884273010558ad4fe3f29939cee982))
+* leave off-page text out of Page.Text, and mask password fields ([#53](https://github.com/giraffesyo/pdf/issues/53)) ([a4e4be3](https://github.com/giraffesyo/pdf/commit/a4e4be31664f9a470761a395a22aeeff19808ff9))
+* measure a glyph without its spacing, and join unspaced scripts ([#65](https://github.com/giraffesyo/pdf/issues/65)) ([43c529b](https://github.com/giraffesyo/pdf/commit/43c529ba2179f2fb05007a243255443e407f233a))
+* read CJK fonts' roman CIDs and a ToUnicode named Identity-H ([#54](https://github.com/giraffesyo/pdf/issues/54)) ([2554e67](https://github.com/giraffesyo/pdf/commit/2554e6710afd6584171b91a872e3f1b93b10ab4d))
+* read Type3 fonts by their FontMatrix and glyph names ([#49](https://github.com/giraffesyo/pdf/issues/49)) ([1d7b40b](https://github.com/giraffesyo/pdf/commit/1d7b40be98d0ffe95e6ac496ce9d75e3f38906ce))
+* show a list box's options from where it is scrolled ([#58](https://github.com/giraffesyo/pdf/issues/58)) ([c02e3c5](https://github.com/giraffesyo/pdf/commit/c02e3c58b30fbc857b020a1d3af1c494484da178))
+* what a real-world sample (GovDocs1) found ([#62](https://github.com/giraffesyo/pdf/issues/62)) ([dfa9668](https://github.com/giraffesyo/pdf/commit/dfa9668ee4a6aad9ca8ac8983861245569359f28))
+
+
+### Performance
+
+* give back the allocations the new layout added ([#63](https://github.com/giraffesyo/pdf/issues/63)) ([3fea822](https://github.com/giraffesyo/pdf/commit/3fea822e78f2a41191c951d063f14e1867b1ce60))
+
 ## [0.7.0](https://github.com/giraffesyo/pdf/compare/v0.6.0...v0.7.0) (2026-09-24)
 
 
