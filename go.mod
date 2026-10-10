@@ -1,5 +1,3 @@
 module github.com/giraffesyo/pdf
 
-go 1.26.0
-
-toolchain go1.26.9
+go 1.27.2
