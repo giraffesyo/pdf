@@ -3,7 +3,7 @@
 // dependencies never enter the root module's graph.
 module github.com/giraffesyo/pdf/benchmarks
 
-go 1.26.0
+go 1.27.2
 
 require (
 	github.com/giraffesyo/pdf v0.0.0
