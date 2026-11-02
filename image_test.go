@@ -1019,3 +1019,49 @@ func TestImageDecodeJPX(t *testing.T) {
 		}
 	})
 }
+
+// TestExpandBits checks the eight-at-a-time path against sample, the
+// per-pixel reading it replaces, over widths that end mid-byte and rows
+// the data runs out partway through.
+func TestExpandBits(t *testing.T) {
+	data := make([]byte, 64)
+	for i := range data {
+		data[i] = byte((i*37 + 11) & 0xFF)
+	}
+	for _, w := range []int{1, 3, 7, 8, 9, 15, 16, 17, 31} {
+		stride := (w + 7) / 8
+		for _, n := range []int{len(data), 5, stride*2 + 1, 0} {
+			for _, invert := range []bool{false, true} {
+				rows := sampleRows{data: data[:n], stride: stride, bpc: 1, maxval: 1}
+				img := image.NewGray(image.Rect(0, 0, w, 4))
+				expandBits(img, rows, invert)
+				for y := range 4 {
+					for x := range w {
+						v := rows.sample(y, x)
+						if invert {
+							v = 1 - v
+						}
+						if want := byte(v * 255); img.Pix[y*img.Stride+x] != want {
+							t.Fatalf("w=%d n=%d invert=%v (%d,%d) = %d, want %d", w, n, invert, x, y, img.Pix[y*img.Stride+x], want)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkExpandBits(b *testing.B) {
+	const w, h = 5262, 3374 // a 600 dpi letter-size scan page
+	stride := (w + 7) / 8
+	data := make([]byte, stride*h)
+	for i := range data {
+		data[i] = byte(i * 37 & 0xFF)
+	}
+	rows := sampleRows{data: data, stride: stride, bpc: 1, maxval: 1}
+	img := image.NewGray(image.Rect(0, 0, w, h))
+	b.SetBytes(int64(w * h))
+	for b.Loop() {
+		expandBits(img, rows, false)
+	}
+}

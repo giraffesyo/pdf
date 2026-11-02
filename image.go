@@ -2,6 +2,7 @@ package pdf
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
@@ -339,6 +340,10 @@ func (im Image) decodeSamples(data []byte) (image.Image, error) {
 			}
 			return img, nil
 		}
+		if bpc == 1 {
+			expandBits(img, rows, invert)
+			return img, nil
+		}
 		for y := range h {
 			for x := range w {
 				v := rows.sample(y, x)
@@ -374,6 +379,51 @@ func (im Image) decodeSamples(data []byte) (image.Image, error) {
 		return img, nil
 	default:
 		return nil, fmt.Errorf("pdf: decode %d-component %s image: %w", ncomp, orUnknown(family), errors.ErrUnsupported)
+	}
+}
+
+// bitPixels maps a byte of one-bit samples to its eight 8-bit pixels,
+// most significant bit first, packed little-endian so a single store
+// writes them in order.
+var bitPixels = func() (t [256]uint64) {
+	for b := range t {
+		for i := range 8 {
+			if b>>(7-i)&1 != 0 {
+				t[b] |= 0xFF << (8 * i)
+			}
+		}
+	}
+	return t
+}()
+
+// expandBits writes one-bit grey samples to img eight at a time. Scans
+// are almost all bilevel and tens of megapixels a page, so this is the
+// path their decoding spends its time on. Like sample, it reads data
+// past the end of a short row as zero samples.
+func expandBits(img *image.Gray, rows sampleRows, invert bool) {
+	w := img.Rect.Dx()
+	var flip byte
+	if invert {
+		flip = 0xFF
+	}
+	for y := range img.Rect.Dy() {
+		src := rows.row(y)
+		dst := img.Pix[y*img.Stride : y*img.Stride+w]
+		x := 0
+		for _, b := range src[:min(len(src), w/8)] {
+			binary.LittleEndian.PutUint64(dst[x:], bitPixels[b^flip])
+			x += 8
+		}
+		for ; x < w; x++ {
+			var v byte
+			if i := x / 8; i < len(src) {
+				v = src[i] >> (7 - x%8) & 1
+			}
+			if invert {
+				v ^= 1
+			}
+			dst[x] = -v // 0 or 0xFF
+		}
 	}
 }
 
