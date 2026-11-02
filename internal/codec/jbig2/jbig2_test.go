@@ -138,34 +138,12 @@ func TestUnsupported(t *testing.T) {
 	region := regionInfoData(64, 64, 0, 0, opOr)
 	cases := map[string][]byte{
 		"huffman symbol dictionary": unsupportedStream(segSymbolDict, append(binary.BigEndian.AppendUint16(nil, 1), make([]byte, 16)...)),
-		"refagg symbol dictionary":  unsupportedStream(segSymbolDict, append(binary.BigEndian.AppendUint16(nil, 2), make([]byte, 16)...)),
 		"huffman text region":       unsupportedStream(segTextRegionImmediate, append(append(region, 0, 1), make([]byte, 16)...)),
-		"refinement region":         unsupportedStream(segRefinementImmediate, append(region, make([]byte, 16)...)),
 		"halftone region":           unsupportedStream(segHalftoneImmediate, append(region, make([]byte, 16)...)),
 		"pattern dictionary":        unsupportedStream(segPatternDict, make([]byte, 16)),
 		"extended template":         unsupportedStream(segGenericImmediate, append(append(region, 0x10), make([]byte, 32)...)),
 		"colour extension":          unsupportedStream(segGenericImmediate, append(regionInfoData(64, 64, 0, 0, opOr|8), make([]byte, 16)...)),
 		"colour palette":            unsupportedStream(segColourPalette, nil),
-	}
-	// A refinement-enabled text region whose instance has RI = 1.
-	{
-		syms := []*bitmap{glyph(0, 8, 8), glyph(1, 8, 8)}
-		w := &segWriter{}
-		n := w.segment(segSymbolDict, nil, symbolDictData(&symbolDictSpec{syms: syms, at: nominalAT[0]}, make([]mqCx, 1<<16)), false)
-		w.segment(segPageInfo, nil, pageInfoData(64, 64, false, 0, opOr), false)
-		b := regionInfoData(64, 64, 0, 0, opOr)
-		b = binary.BigEndian.AppendUint16(b, 1<<1|refTopLeft<<4)
-		b = append(b, 0, 0, 0, 0)
-		b = binary.BigEndian.AppendUint32(b, 1)
-		e := newMQEncoder()
-		var iadt, iafs, iari intCtx
-		e.encodeInt(&iadt, 0, false)
-		e.encodeInt(&iadt, 0, false)
-		e.encodeInt(&iafs, 3, false)
-		e.encodeIAID(make([]mqCx, 4), 1, 1)
-		e.encodeInt(&iari, 1, false)
-		w.segment(segTextRegionImmediate, []uint32{n}, append(b, e.flush()...), false)
-		cases["refined text instance"] = w.buf
 	}
 	for name, stream := range cases {
 		t.Run(name, func(t *testing.T) {

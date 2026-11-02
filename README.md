@@ -115,9 +115,9 @@ with or without an Adobe marker), and — natively, from the
 ITU-T specifications — JPEG 2000 (JP2 files and codestreams: every
 progression order, tiling, precinct and code-block option, both wavelets,
 palettes and channel definitions), CCITT Group 3/4 fax and JBIG2
-(generic, symbol and text regions with arithmetic coding, which is what
-scanner pipelines emit). The rarer JBIG2 features (Huffman tables,
-refinement, halftones) return `errors.ErrUnsupported`; their `Data` is
+(generic, symbol, text and refinement regions with arithmetic coding,
+which is what scanner pipelines emit). The rarer JBIG2 features (Huffman
+tables, halftones) return `errors.ErrUnsupported`; their `Data` is
 still handed over for an external decoder. `Limits.MaxImagePixels` bounds
 what `Decode` will allocate.
 
@@ -220,10 +220,10 @@ searchable.
   Adobe's CJK collections (Japan1, GB1, CNS1, Korea1, KR) with neither a
   ToUnicode map nor a cmap reads its CIDs through the collection's
   character table, built in (about 120 KB).
-- `Image.Decode` does not decode the Huffman, refinement and halftone parts
-  of JBIG2, JPEG 2000 samples deeper than 16 bits or the Part 15
-  high-throughput coder (JPEG 2000 decodes to 8 bits per sample); their
-  encoded data is still reported. Soft masks, colour-key masking and
+- `Image.Decode` does not decode the Huffman and halftone parts of JBIG2,
+  JPEG 2000 samples deeper than 16 bits or the Part 15 high-throughput
+  coder (JPEG 2000 decodes to 8 bits per sample); their encoded data is
+  still reported. Soft masks, colour-key masking and
   JPEG 2000 opacity channels are not applied.
 
 ## Benchmarks
