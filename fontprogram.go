@@ -26,11 +26,11 @@ func embeddedSimpleFallback(font object.Value, streamLimit int) (map[uint32]stri
 		if err != nil {
 			return nil, fmt.Errorf("read embedded OpenType font: %w", err)
 		}
-		mapping, err := parseSFNTCMap(data)
+		cmap, err := parseSFNTCMap(data)
 		if err != nil {
 			return nil, err
 		}
-		return simpleMapping(mapping), nil
+		return simpleMapping(cmap), nil
 	}
 	if stream := desc.Key("FontFile"); stream.Kind() == object.Stream {
 		data, err := readStreamBoundedLimitError(stream, streamLimit)
@@ -63,11 +63,11 @@ func embeddedCompositeFallback(desc object.Value, streamLimit int) (map[uint32]s
 	if err != nil {
 		return nil, fmt.Errorf("read embedded OpenType font: %w", err)
 	}
-	mapping, err := parseSFNTCMap(data)
+	cmap, err := parseSFNTCMap(data)
 	if err != nil {
 		return nil, err
 	}
-	reverse := reverseGlyphMapping(mapping)
+	reverse := reverseGlyphMapping(cmap.unicode)
 	cidToGID := desc.Key("CIDToGIDMap")
 	out := map[uint32]string{}
 	if cidToGID.Kind() == object.Stream {
@@ -101,29 +101,41 @@ func sfntFontStream(desc object.Value) (object.Value, bool) {
 	return object.Value{}, false
 }
 
-type glyphMapping map[uint32]uint16 // Unicode code point -> glyph ID
+type glyphMapping map[uint32]uint16 // character code -> glyph ID
 
-func parseSFNTCMap(data []byte) (glyphMapping, error) {
+// sfntCMap is an embedded font's cmap table read two ways. unicode maps
+// Unicode scalars to glyphs, for finding the text a glyph shows. bytes
+// maps single-byte codes to glyphs, for simple fonts, whose codes are
+// bytes: a Unicode subtable's entries below 0x100, a Macintosh Roman
+// subtable's bytes, and a symbol subtable's 0xF000–0xF0FF entries. The
+// two key spaces overlap below 0x100 but mean different things there
+// (Macintosh Roman 0xC7 is «, U+00AB), so they are kept apart.
+type sfntCMap struct {
+	unicode glyphMapping
+	bytes   glyphMapping
+}
+
+func parseSFNTCMap(data []byte) (sfntCMap, error) {
 	base := 0
 	if len(data) >= 16 && string(data[:4]) == "ttcf" {
 		if count, ok := u32(data, 8); !ok || count == 0 {
-			return nil, errors.New("embedded TrueType collection has no fonts")
+			return sfntCMap{}, errors.New("embedded TrueType collection has no fonts")
 		}
 		offset, ok := u32(data, 12)
 		if !ok || uint64(offset) > uint64(len(data)) {
-			return nil, errors.New("invalid TrueType collection offset")
+			return sfntCMap{}, errors.New("invalid TrueType collection offset")
 		}
 		base = int(offset)
 	}
 	numTables, ok := u16(data, base+4)
 	if !ok || numTables > 4096 {
-		return nil, errors.New("invalid OpenType table directory")
+		return sfntCMap{}, errors.New("invalid OpenType table directory")
 	}
 	var cmap []byte
 	for i := range int(numTables) {
 		record := base + 12 + 16*i
 		if record+16 > len(data) {
-			return nil, errors.New("truncated OpenType table directory")
+			return sfntCMap{}, errors.New("truncated OpenType table directory")
 		}
 		if string(data[record:record+4]) != "cmap" {
 			continue
@@ -131,22 +143,22 @@ func parseSFNTCMap(data []byte) (glyphMapping, error) {
 		offsetValue := binary.BigEndian.Uint32(data[record+8 : record+12])
 		lengthValue := binary.BigEndian.Uint32(data[record+12 : record+16])
 		if uint64(offsetValue)+uint64(lengthValue) > uint64(len(data)) {
-			return nil, errors.New("invalid OpenType cmap bounds")
+			return sfntCMap{}, errors.New("invalid OpenType cmap bounds")
 		}
 		offset, length := int(offsetValue), int(lengthValue)
 		cmap = data[offset : offset+length]
 		break
 	}
 	if cmap == nil {
-		return nil, errors.New("embedded OpenType font has no cmap")
+		return sfntCMap{}, errors.New("embedded OpenType font has no cmap")
 	}
 	return parseCMapTable(cmap)
 }
 
-func parseCMapTable(data []byte) (glyphMapping, error) {
+func parseCMapTable(data []byte) (sfntCMap, error) {
 	numTables, ok := u16(data, 2)
 	if !ok || numTables > 1024 || 4+8*int(numTables) > len(data) {
-		return nil, errors.New("invalid OpenType cmap header")
+		return sfntCMap{}, errors.New("invalid OpenType cmap header")
 	}
 	type subtable struct {
 		priority int
@@ -154,6 +166,7 @@ func parseCMapTable(data []byte) (glyphMapping, error) {
 		macRoman bool
 	}
 	var tables []subtable
+	symbol := false
 	for i := range int(numTables) {
 		record := 4 + 8*i
 		platform := binary.BigEndian.Uint16(data[record : record+2])
@@ -177,50 +190,73 @@ func parseCMapTable(data []byte) (glyphMapping, error) {
 			macRoman = true
 		case platform == 3 && encodingID == 0:
 			priority = 1
+			symbol = true
 		default:
 			continue
 		}
 		tables = append(tables, subtable{priority: priority, offset: offset, macRoman: macRoman})
 	}
-	out := glyphMapping{}
+	// Subtables are merged from lowest priority to highest, each
+	// overriding what came before.
+	out := sfntCMap{unicode: glyphMapping{}, bytes: glyphMapping{}}
 	for priority := 1; priority <= 5; priority++ {
 		for _, table := range tables {
 			if table.priority != priority {
 				continue
 			}
-			target := out
-			if table.macRoman {
-				target = glyphMapping{}
-			}
-			if err := parseCMapSubtable(data[table.offset:], target); err != nil {
+			sub := glyphMapping{}
+			if err := parseCMapSubtable(data[table.offset:], sub); err != nil {
 				continue
 			}
 			if table.macRoman {
-				convertMacRomanMapping(target, out)
+				out.mergeMacRoman(sub, symbol)
+			} else {
+				out.merge(sub)
 			}
-			if len(out) >= maxFontCMapEntries {
+			if len(out.unicode) >= maxFontCMapEntries {
 				return out, errors.New("embedded font cmap entry limit reached")
 			}
 		}
 	}
-	if len(out) == 0 {
-		return nil, errors.New("embedded OpenType font has no supported Unicode cmap")
+	if len(out.unicode) == 0 && len(out.bytes) == 0 {
+		return sfntCMap{}, errors.New("embedded OpenType font has no supported Unicode cmap")
 	}
 	return out, nil
 }
 
-func convertMacRomanMapping(source, target glyphMapping) {
+// merge adds a Unicode or symbol subtable: its codes are Unicode scalars,
+// those below 0x100 double as bytes, and a symbol font's 0xF000–0xF0FF
+// codes stand for the bytes 0x00–0xFF the subtable does not map itself.
+func (c sfntCMap) merge(sub glyphMapping) {
+	for code, gid := range sub {
+		c.unicode[code] = gid
+		switch {
+		case code <= 0xff:
+			c.bytes[code] = gid
+		case code >= 0xf000 && code <= 0xf0ff:
+			if _, ok := sub[code&0xff]; !ok {
+				c.bytes[code&0xff] = gid
+			}
+		}
+	}
+}
+
+// mergeMacRoman adds a Macintosh Roman subtable: its codes are bytes,
+// whose Unicode scalars Macintosh Roman gives. A symbol font's
+// Macintosh subtable only mirrors its symbol subtable, whose 0xF0xx
+// codes stand for the Windows bytes a document typed (Wingdings' square
+// bullet is "§", 0xA7), so there each byte stands for itself instead.
+func (c sfntCMap) mergeMacRoman(sub glyphMapping, symbol bool) {
 	macRoman := encoding.New("MacRomanEncoding", nil)
-	for code, gid := range source {
+	for code, gid := range sub {
 		if code > 0xff {
 			continue
 		}
-		runes := []rune(macRoman.Decode(byte(code)))
-		if len(runes) == 1 {
-			// Retain the original byte for simple fonts and add its Unicode
-			// scalar for glyph-ID reversal in composite fonts.
-			target[code] = gid
-			target[uint32(runes[0])] = gid
+		c.bytes[code] = gid
+		if symbol {
+			c.unicode[code] = gid
+		} else if runes := []rune(macRoman.Decode(byte(code))); len(runes) == 1 {
+			c.unicode[uint32(runes[0])] = gid
 		}
 	}
 }
@@ -344,17 +380,13 @@ func parseCMapFormat12(data []byte, out glyphMapping, constant bool) error {
 	return nil
 }
 
-func simpleMapping(mapping glyphMapping) map[uint32]string {
-	reverse := reverseGlyphMapping(mapping)
-	out := map[uint32]string{}
-	for code, gid := range mapping {
-		text := reverse[gid]
-		switch {
-		case code <= 0xff:
-			out[code] = text
-		case code >= 0xf000 && code <= 0xf0ff:
-			out[code&0xff] = text
-		}
+// simpleMapping is a simple font's byte-to-text table: each byte's glyph,
+// and the text that glyph shows.
+func simpleMapping(cmap sfntCMap) map[uint32]string {
+	reverse := reverseGlyphMapping(cmap.unicode)
+	out := make(map[uint32]string, len(cmap.bytes))
+	for code, gid := range cmap.bytes {
+		out[code] = reverse[gid]
 	}
 	return out
 }

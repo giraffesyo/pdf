@@ -211,15 +211,39 @@ func TestEmbeddedTrueTypeMacRomanCMapFallback(t *testing.T) {
 	binary.BigEndian.PutUint16(cmap[6:8], 0) // Roman encoding.
 	cmap[12+6+65] = 0
 	cmap[12+6+0x8e] = 1 // MacRoman 0x8e is é.
-	mapping, err := parseSFNTCMap(fontProgram)
+	parsed, err := parseSFNTCMap(fontProgram)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := mapping['é']; got != 1 {
-		t.Fatalf("MacRoman cmap mapping = %#v", mapping)
+	if got := parsed.unicode['é']; got != 1 {
+		t.Fatalf("MacRoman cmap mapping = %#v", parsed)
 	}
-	if got := simpleMapping(mapping)[0x8e]; got != "é" {
+	if got := simpleMapping(parsed)[0x8e]; got != "é" {
 		t.Fatalf("MacRoman simple-font mapping = %q", got)
+	}
+}
+
+// TestMacRomanCMapCollision: in a Macintosh Roman cmap, byte 0xAB is the
+// acute accent and byte 0xC7 is «, whose scalar U+00AB is also a byte
+// value. Each byte must show its own glyph's text, on every run: the
+// overlap once made the result depend on map iteration order.
+func TestMacRomanCMapCollision(t *testing.T) {
+	fontProgram := minimalTrueTypeCMap()
+	cmap := fontProgram[28:]
+	binary.BigEndian.PutUint16(cmap[4:6], 1) // Macintosh platform.
+	binary.BigEndian.PutUint16(cmap[6:8], 0) // Roman encoding.
+	cmap[12+6+65] = 0
+	cmap[12+6+0xab] = 1
+	cmap[12+6+0xc7] = 2
+	for range 50 {
+		parsed, err := parseSFNTCMap(fontProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := simpleMapping(parsed)
+		if got[0xab] != "\u00b4" || got[0xc7] != "«" {
+			t.Fatalf("bytes 0xAB, 0xC7 = %q, %q; want ´, «", got[0xab], got[0xc7])
+		}
 	}
 }
 
@@ -242,6 +266,30 @@ func TestExplicitDifferencesOverrideEmbeddedFontFallback(t *testing.T) {
 	}
 	if got := doc.Text(); got != "B" {
 		t.Fatalf("explicit Differences mapping = %q", got)
+	}
+}
+
+// TestSymbolFontMacCMap: a symbol font's Macintosh subtable mirrors its
+// symbol subtable, whose codes stand for Windows bytes, so its bytes are
+// not read as Macintosh Roman: Wingdings' bullet 0xA7 is "§", as it was
+// typed, not Macintosh Roman's "ß".
+func TestSymbolFontMacCMap(t *testing.T) {
+	cmap := make([]byte, 20+262)
+	binary.BigEndian.PutUint16(cmap[2:4], 2)
+	for i, rec := range [][2]uint16{{1, 0}, {3, 0}} {
+		r := cmap[4+8*i:]
+		binary.BigEndian.PutUint16(r[0:2], rec[0])
+		binary.BigEndian.PutUint16(r[2:4], rec[1])
+		binary.BigEndian.PutUint32(r[4:8], 20)
+	}
+	binary.BigEndian.PutUint16(cmap[22:24], 262) // format 0, length 262
+	cmap[20+6+0xa7] = 1
+	parsed, err := parseCMapTable(cmap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := simpleMapping(parsed)[0xa7]; got != "§" {
+		t.Fatalf("byte 0xA7 = %q, want §", got)
 	}
 }
 
