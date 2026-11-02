@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/giraffesyo/pdf/compare/v0.8.0...v0.8.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **deps:** build with Go 1.27.3, which distrusts eMudhra's compromised intermediate CAs ([#70](https://github.com/giraffesyo/pdf/issues/70)) ([5c3abc1](https://github.com/giraffesyo/pdf/commit/5c3abc1e587585ac434b292caefacc90f2ec29a2))
+
 ## [0.8.0](https://github.com/giraffesyo/pdf/compare/v0.7.0...v0.8.0) (2026-10-10)
 
 
