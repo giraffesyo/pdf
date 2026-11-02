@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1063,5 +1064,67 @@ func BenchmarkExpandBits(b *testing.B) {
 	b.SetBytes(int64(w * h))
 	for b.Loop() {
 		expandBits(img, rows, false)
+	}
+}
+
+// TestJBIG2SharedGlobals: pages whose images refer to one JBIG2Globals
+// stream share its decoded symbol dictionaries, extracted and decoded
+// concurrently, with the same pixels as the image decoded on its own.
+func TestJBIG2SharedGlobals(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("testdata", "images", "scan-jbig2.pdf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := extractOptions(t, src, Options{IncludeImages: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := doc.Pages[0].Images[0]
+	if orig.globals == nil {
+		t.Fatal("fixture has no JBIG2Globals")
+	}
+	want, err := orig.Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const pages = 4 * minPagesPerWorker
+	objs := []string{pdftest.Catalog(2), "", pdftest.Stream("", string(orig.globals.data)), pdftest.Stream("", "q 620 0 0 170 0 0 cm /Im1 Do Q")}
+	var kids []int
+	for i := range pages {
+		page, img := 5+2*i, 6+2*i
+		kids = append(kids, page)
+		objs = append(objs,
+			pdftest.Page(2, 4, fmt.Sprintf("<< /XObject << /Im1 %d 0 R >> >>", img)),
+			pdftest.Stream("/Type /XObject /Subtype /Image /Width 620 /Height 170 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 3 0 R >>", string(orig.Data)))
+	}
+	objs[1] = pdftest.Pages(kids...)
+	doc, err = extractOptions(t, pdftest.Build(1, objs...), Options{IncludeImages: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Pages) != pages {
+		t.Fatalf("pages = %d", len(doc.Pages))
+	}
+	shared := doc.Pages[0].Images[0].globals
+	var wg sync.WaitGroup
+	for i, p := range doc.Pages {
+		if len(p.Images) != 1 || p.Images[0].globals != shared {
+			t.Fatalf("page %d: images %d, globals not shared", i+1, len(p.Images))
+		}
+		wg.Go(func() {
+			got, err := p.Images[0].Decode()
+			if err != nil {
+				t.Errorf("page %d: %v", i+1, err)
+				return
+			}
+			if !bytes.Equal(got.(*image.Gray).Pix, want.(*image.Gray).Pix) {
+				t.Errorf("page %d: pixels differ", i+1)
+			}
+		})
+	}
+	wg.Wait()
+	if shared.parsed == nil || shared.unshared {
+		t.Error("globals were not decoded once for sharing")
 	}
 }

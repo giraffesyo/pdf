@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"io"
 	"math"
+	"sync"
 
 	"github.com/giraffesyo/pdf/internal/codec/ccitt"
 	"github.com/giraffesyo/pdf/internal/codec/dct"
@@ -65,7 +66,7 @@ type Image struct {
 	decode    []float64 // the /Decode array, nil for the default
 	palette   *indexedPalette
 	ccitt     ccitt.Options
-	globals   []byte // JBIG2Globals
+	globals   *jbig2Globals // JBIG2Globals, shared by the document's images
 	maxPixels int
 }
 
@@ -157,7 +158,7 @@ func (im Image) Decode() (image.Image, error) {
 	case "JPXDecode":
 		return im.decodeJPX()
 	case "JBIG2Decode":
-		bits, err := jbig2.Decode(im.Data, im.globals, im.Width, im.Height)
+		bits, err := im.globals.decode(im.Data, im.Width, im.Height)
 		if err != nil {
 			return nil, fmt.Errorf("pdf: decode JBIG2Decode image: %w", err)
 		}
@@ -756,13 +757,14 @@ type inlineImage struct {
 // image byte budget.
 type imageLoader struct {
 	limits  Limits
-	budget  int            // MaxImageBytesPerPage left
-	cache   map[int]*Image // by object number
-	globals map[int][]byte // JBIG2Globals streams by object number
+	budget  int                   // MaxImageBytesPerPage left
+	cache   map[int]*Image        // by object number
+	globals map[int]*jbig2Globals // JBIG2Globals streams by object number
+	shared  *jbig2Cache           // the document's, so pages share decoded globals
 }
 
-func newImageLoader(limits Limits) *imageLoader {
-	return &imageLoader{limits: limits, budget: limits.MaxImageBytesPerPage}
+func newImageLoader(limits Limits, shared *jbig2Cache) *imageLoader {
+	return &imageLoader{limits: limits, budget: limits.MaxImageBytesPerPage, shared: shared}
 }
 
 // readLimit is how much one more image may read: its own stream limit,
@@ -888,11 +890,14 @@ func (l *imageLoader) loadXObject(v object.Value) (Image, error) {
 	return im, nil
 }
 
-func (l *imageLoader) loadGlobals(v object.Value) ([]byte, error) {
+// loadGlobals reads a JBIG2Globals stream, once per page and within the
+// page's budget, and returns the document's shared copy of it, so that
+// its symbol dictionaries are decoded once for every image using it.
+func (l *imageLoader) loadGlobals(v object.Value) (*jbig2Globals, error) {
 	num, indirect := v.ObjectNumber()
 	if indirect {
-		if data, ok := l.globals[num]; ok {
-			return data, nil
+		if g, ok := l.globals[num]; ok {
+			return g, nil
 		}
 	}
 	rc, err := v.Reader()
@@ -904,13 +909,76 @@ func (l *imageLoader) loadGlobals(v object.Value) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if indirect {
-		if l.globals == nil {
-			l.globals = map[int][]byte{}
-		}
-		l.globals[num] = data
+	if !indirect {
+		return &jbig2Globals{data: data}, nil
 	}
-	return data, nil
+	g := l.shared.get(num, data)
+	if l.globals == nil {
+		l.globals = map[int]*jbig2Globals{}
+	}
+	l.globals[num] = g
+	return g, nil
+}
+
+// jbig2Cache is a document's JBIG2Globals streams by object number.
+// Pages extracted concurrently share it.
+type jbig2Cache struct {
+	mu sync.Mutex
+	m  map[int]*jbig2Globals
+}
+
+func newJBIG2Cache() *jbig2Cache { return &jbig2Cache{m: map[int]*jbig2Globals{}} }
+
+// get returns the shared globals for object num, adopting data (the
+// stream's contents, as a page just read them) if it has none yet. A nil
+// cache shares nothing.
+func (c *jbig2Cache) get(num int, data []byte) *jbig2Globals {
+	if c == nil {
+		return &jbig2Globals{data: data}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	g, ok := c.m[num]
+	if !ok {
+		g = &jbig2Globals{data: data}
+		c.m[num] = g
+	}
+	return g
+}
+
+// jbig2Globals is one JBIG2Globals stream, decoded on first use and then
+// reused by every image that refers to it. Images are decoded
+// concurrently, so the decoded form is guarded by mu.
+type jbig2Globals struct {
+	data []byte
+
+	mu     sync.Mutex
+	parsed *jbig2.Globals
+	// unshared is set when the stream cannot be decoded apart from a
+	// page: each image then decodes it afresh, as Decode always did.
+	unshared bool
+}
+
+// decode decodes an image's JBIG2 stream with these globals; g may be nil.
+func (g *jbig2Globals) decode(data []byte, w, h int) ([]byte, error) {
+	if g == nil {
+		return jbig2.Decode(data, nil, w, h)
+	}
+	g.mu.Lock()
+	if g.parsed == nil && !g.unshared {
+		// The first image's size sets the work budget for decoding the
+		// globals. Any failure, a budget one included, falls back to
+		// decoding them with each image, which reproduces the error
+		// where the image itself would have.
+		parsed, err := jbig2.ParseGlobals(g.data, w, h)
+		g.parsed, g.unshared = parsed, err != nil
+	}
+	parsed := g.parsed
+	g.mu.Unlock()
+	if parsed == nil {
+		return jbig2.Decode(data, g.data, w, h)
+	}
+	return jbig2.DecodeGlobals(data, parsed, w, h)
 }
 
 // loadInline builds an Image from an inline image's abbreviated (or full)

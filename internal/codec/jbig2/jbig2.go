@@ -119,6 +119,71 @@ func Decode(data, globals []byte, width, height int) ([]byte, error) {
 	return d.page.data, nil
 }
 
+// Globals is a decoded /JBIG2Globals stream: the symbol dictionaries it
+// defines, ready to be shared by every image that refers to the stream.
+// It is never modified after ParseGlobals returns, so one value may be
+// passed to any number of concurrent DecodeGlobals calls.
+type Globals struct {
+	dicts map[uint32]*symbolDict
+	work  int // budget ParseGlobals consumed, charged again to each image
+}
+
+// ErrGlobalsNotShareable is returned by ParseGlobals for a globals stream
+// that does more than define symbol dictionaries (a page information or
+// region segment, which belongs to a page). Such a stream cannot be
+// decoded apart from its page; pass its bytes to Decode instead.
+var ErrGlobalsNotShareable = errors.New("jbig2: globals stream has page segments")
+
+// ParseGlobals decodes a /JBIG2Globals stream once so that the images
+// sharing it need not decode its symbol dictionaries again. width and
+// height are those of an image that refers to it; they set the work
+// budget exactly as Decode would, and DecodeGlobals charges the work
+// done here to every image, so each image is accepted or refused as if
+// Decode had decoded the globals itself.
+func ParseGlobals(globals []byte, width, height int) (*Globals, error) {
+	if width <= 0 || height <= 0 || width > MaxPixels || height > MaxPixels/width {
+		return nil, fmt.Errorf("jbig2: invalid image size %dx%d", width, height)
+	}
+	budget := min(max(workFactor*width*height, workFloor), maxWork)
+	d := &decoder{dicts: make(map[uint32]*symbolDict), work: budget, globalsOnly: true}
+	if err := d.run(globals); err != nil {
+		if errors.Is(err, ErrGlobalsNotShareable) {
+			return nil, ErrGlobalsNotShareable
+		}
+		return nil, fmt.Errorf("jbig2: globals: %w", err)
+	}
+	return &Globals{dicts: d.dicts, work: budget - d.work}, nil
+}
+
+// DecodeGlobals is Decode with the globals stream already decoded by
+// ParseGlobals. g may be nil when the image has no globals.
+func DecodeGlobals(data []byte, g *Globals, width, height int) ([]byte, error) {
+	if width <= 0 || height <= 0 || width > MaxPixels || height > MaxPixels/width {
+		return nil, fmt.Errorf("jbig2: invalid image size %dx%d", width, height)
+	}
+	d := &decoder{
+		dicts:   make(map[uint32]*symbolDict),
+		regions: make(map[uint32]*bitmap),
+		work:    min(max(workFactor*width*height, workFloor), maxWork),
+	}
+	if g != nil {
+		if d.work -= g.work; d.work < 0 {
+			return nil, fmt.Errorf("jbig2: globals: %w", errBudget)
+		}
+		for n, sd := range g.dicts {
+			d.dicts[n] = sd
+		}
+	}
+	var err error
+	if d.page, err = newBitmap(width, height); err != nil {
+		return nil, fmt.Errorf("jbig2: %w", err)
+	}
+	if err := d.run(data); err != nil {
+		return nil, fmt.Errorf("jbig2: %w", err)
+	}
+	return d.page.data, nil
+}
+
 // decoder is the per-call state: the page being composed, the symbol
 // dictionaries and intermediate regions decoded so far keyed by segment
 // number (globals and page stream share one number space), and the
@@ -129,6 +194,9 @@ type decoder struct {
 	regions  map[uint32]*bitmap // intermediate results awaiting refinement
 	work     int
 	pageInfo bool // a page information segment has been seen
+	// globalsOnly is set by ParseGlobals: there is no page, and segments
+	// that need one fail with ErrGlobalsNotShareable.
+	globalsOnly bool
 }
 
 // charge deducts a w×h bitmap from the work budget, rejecting sizes
@@ -289,6 +357,9 @@ func unknownLength(rest []byte, typ uint8) (int, error) {
 
 // process dispatches one segment by type.
 func (d *decoder) process(seg *segment) error {
+	if d.globalsOnly && usesPage(seg.typ) {
+		return ErrGlobalsNotShareable
+	}
 	switch seg.typ {
 	case segSymbolDict:
 		sd, err := d.decodeSymbolDict(seg.data, d.referredDicts(seg))
@@ -327,6 +398,20 @@ func (d *decoder) process(seg *segment) error {
 		// to Huffman-coded regions, which are unsupported anyway).
 		return nil
 	}
+}
+
+// usesPage reports whether segments of type typ draw on, or describe,
+// the page (regions and page information).
+func usesPage(typ uint8) bool {
+	switch typ {
+	case segTextRegionIntermediate, segTextRegionImmediate, segTextRegionLossless,
+		segHalftoneIntermediate, segHalftoneImmediate, segHalftoneLossless,
+		segGenericIntermediate, segGenericImmediate, segGenericLossless,
+		segRefinementIntermediate, segRefinementImmediate, segRefinementLossless,
+		segPageInfo:
+		return true
+	}
+	return false
 }
 
 // referredDicts returns the symbol dictionaries among seg's referred-to

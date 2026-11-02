@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -97,6 +98,56 @@ func TestFixtures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGlobals decodes every fixture that has a globals stream through
+// ParseGlobals and DecodeGlobals, several pages at once sharing one
+// parsed value, and expects exactly Decode's output.
+func TestGlobals(t *testing.T) {
+	n := 0
+	for _, f := range loadFixtures(t) {
+		if f.globals == nil {
+			continue
+		}
+		n++
+		t.Run(f.name, func(t *testing.T) {
+			g, err := ParseGlobals(f.globals, f.w, f.h)
+			if err != nil {
+				t.Fatalf("ParseGlobals: %v", err)
+			}
+			var wg sync.WaitGroup
+			for range 4 {
+				wg.Go(func() {
+					got, err := DecodeGlobals(f.page, g, f.w, f.h)
+					if err != nil {
+						t.Errorf("DecodeGlobals: %v", err)
+						return
+					}
+					if diff := firstDiff(got, f.want); diff >= 0 {
+						t.Errorf("differs from reference at byte %d", diff)
+					}
+				})
+			}
+			wg.Wait()
+		})
+	}
+	if n == 0 {
+		t.Fatal("no fixtures with globals")
+	}
+
+	t.Run("page segments", func(t *testing.T) {
+		if _, err := ParseGlobals(unsupportedStream(segGenericImmediate, nil), 64, 64); !errors.Is(err, ErrGlobalsNotShareable) {
+			t.Fatalf("err = %v, want ErrGlobalsNotShareable", err)
+		}
+	})
+	t.Run("budget", func(t *testing.T) {
+		// The globals' work counts against each page as if Decode had
+		// done it: a page whose budget it exceeds is refused.
+		g := &Globals{work: workFloor + 1}
+		if _, err := DecodeGlobals(nil, g, 64, 64); !errors.Is(err, errBudget) {
+			t.Fatalf("err = %v, want budget error", err)
+		}
+	})
 }
 
 // TestTruncated feeds every prefix of each fixture to Decode: no prefix
