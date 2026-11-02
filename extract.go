@@ -281,6 +281,7 @@ func extractDocument(
 		limits:      limits,
 		pageNumbers: pageNumbers,
 		fonts:       newFontCache(),
+		jbig2:       newJBIG2Cache(),
 		file:        r,
 		size:        size,
 	}
@@ -348,6 +349,7 @@ type pageExtractor struct {
 	limits      Limits
 	pageNumbers map[int]int
 	fonts       *fontCache
+	jbig2       *jbig2Cache
 	file        io.ReaderAt
 	size        int64
 }
@@ -381,6 +383,7 @@ func (e *pageExtractor) extract(state *pageState, pageNode object.Value, pageNum
 		foldLigatures:   !e.opts.PreserveLigatures,
 		collectImages:   e.opts.IncludeImages || e.opts.OCR != nil,
 		fonts:           e.fonts,
+		jbig2:           e.jbig2,
 		glyphs:          state.glyphs,
 		scratch:         state.scratch,
 	}
@@ -898,7 +901,8 @@ type walker struct {
 	resolver        CMapResolver
 	ignoreArtifacts bool
 	foldLigatures   bool
-	fonts           *fontCache // document-wide, by object number; see loadFont
+	fonts           *fontCache  // document-wide, by object number; see loadFont
+	jbig2           *jbig2Cache // document-wide JBIG2Globals; see loadGlobals
 
 	glyphs   *glyphBuffer
 	scratch  *docScratch
@@ -1428,7 +1432,7 @@ func (w *walker) loadImages() ([]Image, error) {
 	if len(w.images) == 0 {
 		return nil, nil
 	}
-	loader := newImageLoader(w.limits)
+	loader := newImageLoader(w.limits, w.jbig2)
 	images := make([]Image, 0, len(w.images))
 	for _, src := range w.images {
 		im, err := loader.load(src)
