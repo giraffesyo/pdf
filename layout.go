@@ -501,8 +501,9 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 	prevIndex := 0    // content index of the last glyph written
 	prevText := ""    // its text
 	wrote := false
-	prevEnd := 0.0
-	for _, glyph := range line.glyphs {
+	prevStart, prevEnd := 0.0, 0.0
+	joined := false // the glyph's mark came first and took the gap test
+	for i, glyph := range line.glyphs {
 		start := glyphProjection(*glyph.Glyph, line.dir, false)
 		end := glyphProjection(*glyph.Glyph, line.dir, true)
 		if strings.TrimSpace(glyph.Text) == "" {
@@ -517,19 +518,34 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 			}
 			continue
 		}
-		if pending != "" && start < pendingMid && glyph.index != pendingIndex+1 {
+		// A mark — a glyph with no advance drawn within a neighbour —
+		// goes with that glyph: leading it, the gap before the pair is
+		// tested at the mark from where the glyph starts; trailing it,
+		// there is no gap. Either way the gap after the pair is measured
+		// from the glyph, not the mark.
+		gapStart, leads, trails := start, false, false
+		if zeroAdvance(*glyph.Glyph) {
+			if i+1 < len(line.glyphs) && marksGlyph(line, glyph, line.glyphs[i+1]) {
+				leads = true
+				gapStart = glyphProjection(*line.glyphs[i+1].Glyph, line.dir, false)
+			} else {
+				trails = wrote && start >= min(prevStart, prevEnd) && start < max(prevStart, prevEnd)
+			}
+		}
+		if pending != "" && gapStart < pendingMid && glyph.index != pendingIndex+1 {
 			pending, prevEnd = "", textEnd // the space lies within this glyph
 		}
 		if wrote {
 			switch {
 			case pending != "":
 				emit(pending)
-			case !strings.HasPrefix(glyph.Text, " "):
+			case joined || trails || strings.HasPrefix(glyph.Text, " "):
+			default:
 				gap := wordGap(glyph.Size)
 				if unspacedScript(prevText) && unspacedScript(glyph.Text) {
 					gap = unspacedGap(glyph.Size)
 				}
-				if start-prevEnd > gap {
+				if gapStart-prevEnd > gap {
 					emit(" ")
 				}
 			}
@@ -539,10 +555,45 @@ func walkLayoutLine(line layoutLine, emit func(string)) {
 		pending = glyph.Text[len(text):]
 		pendingMid, pendingIndex = end, glyph.index
 		wrote = true
-		prevEnd = end
 		prevIndex = glyph.index
-		prevText = text
+		joined = leads
+		if !leads && !trails {
+			prevStart, prevEnd = start, end
+			prevText = text
+		}
 	}
+}
+
+// zeroAdvance reports a glyph that takes up no room along its line: a
+// combining mark drawn over or under another glyph.
+func zeroAdvance(g Glyph) bool {
+	return math.Abs(g.Advance) <= 0.01*max(g.Size, 1)
+}
+
+// marksGlyph reports whether mark, a glyph with no advance, belongs to
+// the glyph g that follows it on the line: g was drawn after it, and it
+// lies within g or a little before g's start, where producers that draw
+// a mark ahead of its letter often place it.
+func marksGlyph(line layoutLine, mark, g layoutGlyph) bool {
+	if zeroAdvance(*g.Glyph) || g.index <= mark.index {
+		return false
+	}
+	p := glyphProjection(*mark.Glyph, line.dir, false)
+	a := glyphProjection(*g.Glyph, line.dir, false)
+	b := glyphProjection(*g.Glyph, line.dir, true)
+	return p >= min(a, b)-0.25*max(g.Size, 1) && p < max(a, b)
+}
+
+// markWithin reports whether position p along the line, where a mark is
+// drawn, lies within glyph g: from its start up to, not including, its
+// end, where the next glyph starts.
+func markWithin(line layoutLine, g layoutGlyph, p float64) bool {
+	if zeroAdvance(*g.Glyph) {
+		return false
+	}
+	a := glyphProjection(*g.Glyph, line.dir, false)
+	b := glyphProjection(*g.Glyph, line.dir, true)
+	return p >= min(a, b) && p < max(a, b)
 }
 
 // minWordGapEm is the gap between glyphs, in font sizes, that separates

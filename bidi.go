@@ -89,12 +89,75 @@ func classifyBidi(text string) bidiClass {
 
 // writeBidiLine writes a line holding right-to-left text in logical order.
 func writeBidiLine(b *strings.Builder, line layoutLine) {
+	marksBeforeBases(line)
 	var pieces []string
 	walkLayoutLine(line, func(text string) { pieces = append(pieces, text) })
 	for _, piece := range logicalOrder(pieces) {
 		b.WriteString(piece)
 	}
 }
+
+// marksBeforeBases moves each right-to-left letter's marks — glyphs with
+// no advance — to just before it in visual order. Producers draw a mark
+// next to its letter, and where the mark lies within the letter, ordering
+// by position puts it after the letter, so that reversing the word into
+// logical order would put it first. A mark is moved only when the drawing
+// order agrees: the letter is the first glyph with an advance drawn after
+// it. Several marks on one letter keep their order.
+func marksBeforeBases(line layoutLine) {
+	gs := line.glyphs
+	at := make(map[int]int, len(gs)) // content index -> position on the line
+	for i, g := range gs {
+		at[g.index] = i
+	}
+	before := map[int][]int{} // base position -> the marks to put before it
+	moved := map[int]bool{}
+	for i, g := range gs {
+		if !zeroAdvance(*g.Glyph) {
+			continue
+		}
+		// The first glyph drawn after the mark that is not itself a mark.
+		base := -1
+		for k := g.index + 1; k <= g.index+maxMarksPerBase; k++ {
+			j, ok := at[k]
+			if !ok {
+				break
+			}
+			if !zeroAdvance(*gs[j].Glyph) {
+				base = j
+				break
+			}
+		}
+		if base < 0 || base > i {
+			continue // none, or already before it
+		}
+		if r, _ := utf8.DecodeRuneInString(gs[base].Text); !isRightToLeft(r) ||
+			!markWithin(line, gs[base], glyphProjection(*g.Glyph, line.dir, false)) {
+			continue
+		}
+		before[base] = append(before[base], i)
+		moved[i] = true
+	}
+	if len(moved) == 0 {
+		return
+	}
+	out := make([]layoutGlyph, 0, len(gs))
+	for i, g := range gs {
+		if moved[i] {
+			continue
+		}
+		for _, m := range before[i] {
+			out = append(out, gs[m])
+		}
+		out = append(out, g)
+	}
+	copy(gs, out)
+}
+
+// maxMarksPerBase bounds how many marks may be drawn between a mark and
+// its letter: Arabic stacks a few (shadda with a vowel, a hamza and a
+// vowel), Hebrew a vowel, a dagesh and a cantillation mark or two.
+const maxMarksPerBase = 8
 
 // logicalOrder reorders pieces given in visual order into logical order.
 func logicalOrder(pieces []string) []string {
