@@ -21,7 +21,25 @@ type textRegion struct {
 	defPixel   uint32
 	dsOffset   int
 	numInst    uint32
-	refine     bool // SBREFINE: an RI value precedes each instance
+	refine     bool      // SBREFINE: an RI value precedes each instance
+	rTemplate  uint8     // SBRTEMPLATE
+	rAT        [2][2]int // SBRAT; template 0 only
+}
+
+// textCtx holds the arithmetic contexts of the text region decoding
+// procedure. A text region segment starts with a fresh set; a symbol
+// dictionary that aggregates symbols keeps one set for all of them
+// (6.5.8.2, Table 17), so it is passed in rather than made per call.
+type textCtx struct {
+	iadt, iafs, iads, iait, iari intCtx
+	iardw, iardh, iardx, iardy   intCtx
+	iaid                         []mqCx
+	codeLen                      uint   // SBSYMCODELEN
+	gr                           []mqCx // refinement contexts
+}
+
+func newTextCtx(codeLen uint) *textCtx {
+	return &textCtx{iaid: make([]mqCx, 1<<(codeLen+1)), codeLen: codeLen}
 }
 
 // decodeTextRegion parses and decodes a type 4/6/7 segment body using the
@@ -48,14 +66,12 @@ func (d *decoder) decodeTextRegion(data []byte, dicts []*symbolDict) (*bitmap, *
 	if t.dsOffset > 15 {
 		t.dsOffset -= 32 // signed 5-bit field
 	}
-	rTemplate := flags >> 15 & 1
+	t.rTemplate = uint8(flags >> 15 & 1)
 	if sbHuff {
 		return nil, nil, fmt.Errorf("huffman-coded text region: %w", errors.ErrUnsupported)
 	}
-	if refine && rTemplate == 0 {
-		// Refinement AT pixels; only needed when an instance actually
-		// refines (RI != 0), which is out of scope, so they are skipped.
-		if _, err := r.bytes(4); err != nil {
+	if refine && t.rTemplate == 0 {
+		if t.rAT, err = readRefineAT(r); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -87,7 +103,11 @@ func (d *decoder) decodeTextRegion(data []byte, dicts []*symbolDict) (*bitmap, *
 	if t.defPixel != 0 {
 		bm.fill(1)
 	}
-	if err := d.decodeTextInstances(&t, bm, syms, newMQDecoder(r.rest())); err != nil {
+	tc := newTextCtx(symCodeLen(len(syms)))
+	if refine {
+		tc.gr = make([]mqCx, refineContexts)
+	}
+	if err := d.decodeTextInstances(&t, bm, syms, newMQDecoder(r.rest()), tc); err != nil {
 		return nil, nil, err
 	}
 	return bm, &t.info, nil
@@ -107,14 +127,11 @@ func symCodeLen(n int) uint {
 }
 
 // decodeTextInstances runs the text region decoding procedure (6.4.5)
-// with arithmetic integer decoding, placing symbols onto bm.
-func (d *decoder) decodeTextInstances(t *textRegion, bm *bitmap, syms []*bitmap, mq *mqDecoder) error {
+// with arithmetic integer decoding, placing symbols onto bm. Symbol IDs
+// are tc.codeLen bits and index syms.
+func (d *decoder) decodeTextInstances(t *textRegion, bm *bitmap, syms []*bitmap, mq *mqDecoder, tc *textCtx) error {
 	strips := 1 << t.logStrips
-	codeLen := symCodeLen(len(syms))
-	iaid := make([]mqCx, 1<<(codeLen+1))
-	var iadt, iafs, iads, iait, iari intCtx
-
-	v, ok := mq.decodeInt(&iadt)
+	v, ok := mq.decodeInt(&tc.iadt)
 	if !ok {
 		return errors.New("OOB initial STRIPT")
 	}
@@ -122,12 +139,12 @@ func (d *decoder) decodeTextInstances(t *textRegion, bm *bitmap, syms []*bitmap,
 	firsts := 0
 	inst := 0
 	for inst < int(t.numInst) {
-		dt, ok := mq.decodeInt(&iadt)
+		dt, ok := mq.decodeInt(&tc.iadt)
 		if !ok {
 			return errors.New("OOB strip delta T")
 		}
 		stript += int(dt) * strips
-		dfs, ok := mq.decodeInt(&iafs)
+		dfs, ok := mq.decodeInt(&tc.iafs)
 		if !ok {
 			return errors.New("OOB first symbol S")
 		}
@@ -136,7 +153,7 @@ func (d *decoder) decodeTextInstances(t *textRegion, bm *bitmap, syms []*bitmap,
 		first := true
 		for {
 			if !first {
-				ids, ok := mq.decodeInt(&iads)
+				ids, ok := mq.decodeInt(&tc.iads)
 				if !ok {
 					break // OOB: end of strip
 				}
@@ -148,24 +165,28 @@ func (d *decoder) decodeTextInstances(t *textRegion, bm *bitmap, syms []*bitmap,
 			}
 			curt := 0
 			if strips > 1 {
-				ct, ok := mq.decodeInt(&iait)
+				ct, ok := mq.decodeInt(&tc.iait)
 				if !ok {
 					return errors.New("OOB symbol T")
 				}
 				curt = int(ct)
 			}
 			tt := stript + curt
-			id := mq.decodeIAID(iaid, codeLen)
+			id := mq.decodeIAID(tc.iaid, tc.codeLen)
 			if int(id) >= len(syms) {
 				return fmt.Errorf("symbol ID %d out of range (%d symbols)", id, len(syms))
 			}
 			sym := syms[id]
 			if t.refine {
-				// 6.4.11: RI != 0 means this instance is refined, which is
-				// out of scope; RI == 0 uses the symbol as is.
-				ri, ok := mq.decodeInt(&iari)
-				if !ok || ri != 0 {
-					return fmt.Errorf("refined text region symbol: %w", errors.ErrUnsupported)
+				ri, ok := mq.decodeInt(&tc.iari)
+				if !ok {
+					return errors.New("OOB refinement flag")
+				}
+				if ri != 0 {
+					var err error
+					if sym, err = d.refineInstance(t, sym, mq, tc); err != nil {
+						return err
+					}
 				}
 			}
 			// 6.4.5 step 3 c x: in non-transposed mode S runs along x and
@@ -188,7 +209,11 @@ func (d *decoder) decodeTextInstances(t *textRegion, bm *bitmap, syms []*bitmap,
 				}
 				curs += sym.h - 1
 			}
-			d.work -= bm.compose(sym, x, y, t.combOp)
+			// Every instance costs at least one unit, so instances of
+			// empty symbols — which touch no pixels — still run out the
+			// budget rather than looping up to maxInstances per region
+			// or, in a dictionary, per aggregate symbol.
+			d.work -= max(1, bm.compose(sym, x, y, t.combOp))
 			if d.work < 0 {
 				return errBudget
 			}
@@ -205,3 +230,32 @@ const (
 	refBottomRight = 2
 	refTopRight    = 3
 )
+
+// refineInstance decodes the refined bitmap of a text region instance
+// whose RI is set (6.4.11): its size and offset relative to the symbol,
+// then the symbol refined to that size.
+func (d *decoder) refineInstance(t *textRegion, ibo *bitmap, mq *mqDecoder, tc *textCtx) (*bitmap, error) {
+	var rd [4]int32 // RDW, RDH, RDX, RDY
+	for i, cx := range []*intCtx{&tc.iardw, &tc.iardh, &tc.iardx, &tc.iardy} {
+		v, ok := mq.decodeInt(cx)
+		if !ok {
+			return nil, errors.New("OOB refinement delta")
+		}
+		rd[i] = v
+	}
+	w, h := int64(ibo.w)+int64(rd[0]), int64(ibo.h)+int64(rd[1])
+	if w < 0 || h < 0 || w > MaxPixels || h > MaxPixels {
+		return nil, fmt.Errorf("invalid refined symbol size %dx%d", w, h)
+	}
+	if err := d.charge(int(w), int(h)); err != nil {
+		return nil, err
+	}
+	p := refineParams{
+		w: int(w), h: int(h),
+		template: t.rTemplate, at: t.rAT,
+		ref: ibo,
+		dx:  int(rd[0]>>1) + int(rd[2]), // floor(RDW/2) + RDX
+		dy:  int(rd[1]>>1) + int(rd[3]),
+	}
+	return decodeRefinement(&p, mq, tc.gr)
+}

@@ -11,16 +11,19 @@
 // regions (§6.2) with all four GB templates, adaptive template pixels and
 // TPGDON, MMR (T.6) generic regions via the ccitt package, symbol
 // dictionaries (§6.5) and text regions (§6.4) with arithmetic coding in
-// all reference corners and both orientations, and the OR/AND/XOR/XNOR/
-// replace composition operators.
+// all reference corners and both orientations, generic refinement (§6.3)
+// with both templates and typical prediction — as refinement regions
+// over the page or an intermediate region, refined text region
+// instances, and the refined and aggregate symbols of dictionaries with
+// SDREFAGG set — and the OR/AND/XOR/XNOR/replace composition operators.
+// Intermediate regions are kept for the refinement that refers to them
+// rather than drawn on the page.
 //
 // Unsupported, reported with an error wrapping errors.ErrUnsupported:
 // Huffman-coded symbol dictionaries and text regions (SDHUFF/SBHUFF = 1),
-// refinement (region types 40–43, SDREFAGG = 1, and refined text region
-// instances), pattern dictionaries and halftone regions (types 16, 20,
-// 22, 23), the extended 12-pixel generic template, and the colour
-// extension. Tables (53), profiles (52) and extension (62) segments are
-// skipped.
+// pattern dictionaries and halftone regions (types 16, 20, 22, 23), the
+// extended 12-pixel generic template, and the colour extension. Tables
+// (53), profiles (52) and extension (62) segments are skipped.
 //
 // Decode never panics on malformed input: every size read from the
 // stream is validated before allocation, each bitmap is capped at
@@ -99,8 +102,9 @@ func Decode(data, globals []byte, width, height int) ([]byte, error) {
 		return nil, fmt.Errorf("jbig2: invalid image size %dx%d", width, height)
 	}
 	d := &decoder{
-		dicts: make(map[uint32]*symbolDict),
-		work:  min(max(workFactor*width*height, workFloor), maxWork),
+		dicts:   make(map[uint32]*symbolDict),
+		regions: make(map[uint32]*bitmap),
+		work:    min(max(workFactor*width*height, workFloor), maxWork),
 	}
 	var err error
 	if d.page, err = newBitmap(width, height); err != nil {
@@ -116,11 +120,13 @@ func Decode(data, globals []byte, width, height int) ([]byte, error) {
 }
 
 // decoder is the per-call state: the page being composed, the symbol
-// dictionaries decoded so far keyed by segment number (globals and page
-// stream share one number space), and the remaining work budget.
+// dictionaries and intermediate regions decoded so far keyed by segment
+// number (globals and page stream share one number space), and the
+// remaining work budget.
 type decoder struct {
 	page     *bitmap
 	dicts    map[uint32]*symbolDict
+	regions  map[uint32]*bitmap // intermediate results awaiting refinement
 	work     int
 	pageInfo bool // a page information segment has been seen
 }
@@ -296,19 +302,23 @@ func (d *decoder) process(seg *segment) error {
 		if err != nil {
 			return err
 		}
-		return d.composeRegion(bm, info)
+		return d.regionResult(seg, bm, info)
 	case segGenericIntermediate, segGenericImmediate, segGenericLossless:
 		bm, info, err := d.decodeGenericRegion(seg.data)
 		if err != nil {
 			return err
 		}
-		return d.composeRegion(bm, info)
+		return d.regionResult(seg, bm, info)
+	case segRefinementIntermediate, segRefinementImmediate, segRefinementLossless:
+		bm, info, err := d.decodeRefinementRegion(seg)
+		if err != nil {
+			return err
+		}
+		return d.regionResult(seg, bm, info)
 	case segPageInfo:
 		return d.readPageInfo(seg.data)
 	case segPatternDict, segHalftoneIntermediate, segHalftoneImmediate, segHalftoneLossless:
 		return fmt.Errorf("halftone region: %w", errors.ErrUnsupported)
-	case segRefinementIntermediate, segRefinementImmediate, segRefinementLossless:
-		return fmt.Errorf("refinement region: %w", errors.ErrUnsupported)
 	case segColourPalette:
 		return fmt.Errorf("colour extension: %w", errors.ErrUnsupported)
 	default:
@@ -416,6 +426,25 @@ func (d *decoder) visibleRows(info *regionInfo) int {
 		return 0
 	}
 	return min(info.h, d.page.h-info.y)
+}
+
+// maxRegions bounds the intermediate regions held for refinement at once.
+const maxRegions = 1 << 10
+
+// regionResult handles a decoded region (8.2 step 5): an immediate one is
+// drawn onto the page, and an intermediate one is kept for the
+// refinement region that will refer to it, as the reference decoder and
+// poppler do, rather than drawn.
+func (d *decoder) regionResult(seg *segment, bm *bitmap, info *regionInfo) error {
+	switch seg.typ {
+	case segTextRegionIntermediate, segGenericIntermediate, segRefinementIntermediate:
+		if len(d.regions) >= maxRegions {
+			return errors.New("too many intermediate regions")
+		}
+		d.regions[seg.number] = bm
+		return nil
+	}
+	return d.composeRegion(bm, info)
 }
 
 // composeRegion draws a decoded region onto the page (8.2 step 5).

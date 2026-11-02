@@ -12,7 +12,8 @@ import (
 // segment asked for them (7.4.3.1.1 "bitmap coding context retained").
 type symbolDict struct {
 	exported []*bitmap
-	cx       []mqCx // nil unless retained
+	cx       []mqCx // generic contexts; nil unless retained
+	gr       []mqCx // refinement contexts; nil unless retained with SDREFAGG
 }
 
 // maxSymbols bounds the number of symbols a dictionary may declare; real
@@ -33,11 +34,9 @@ func (d *decoder) decodeSymbolDict(data []byte, inputDicts []*symbolDict) (*symb
 	ctxUsed := flags>>8&1 != 0
 	ctxRetained := flags>>9&1 != 0
 	template := uint8(flags >> 10 & 3)
+	rTemplate := uint8(flags >> 12 & 1)
 	if sdHuff {
 		return nil, fmt.Errorf("huffman-coded symbol dictionary: %w", errors.ErrUnsupported)
-	}
-	if sdRefAgg {
-		return nil, fmt.Errorf("refinement/aggregate symbol dictionary: %w", errors.ErrUnsupported)
 	}
 	gp := genericParams{template: template}
 	nAT := 1
@@ -49,6 +48,12 @@ func (d *decoder) decodeSymbolDict(data []byte, inputDicts []*symbolDict) (*symb
 			return nil, err
 		}
 		if gp.at[i][1], err = r.i8(); err != nil {
+			return nil, err
+		}
+	}
+	var rAT [2][2]int
+	if sdRefAgg && rTemplate == 0 {
+		if rAT, err = readRefineAT(r); err != nil {
 			return nil, err
 		}
 	}
@@ -74,14 +79,16 @@ func (d *decoder) decodeSymbolDict(data []byte, inputDicts []*symbolDict) (*symb
 		return nil, fmt.Errorf("symbol dictionary too large (%d symbols)", len(input)+int(numNew))
 	}
 
-	var cx []mqCx
+	var cx, gr []mqCx
 	if ctxUsed {
 		// Reuse the contexts of the last referred-to dictionary that
 		// retained them (7.4.3.2.3 step 2).
 		for i := len(inputDicts) - 1; i >= 0 && cx == nil; i-- {
 			if inputDicts[i].cx != nil {
-				cx = make([]mqCx, len(inputDicts[i].cx))
-				copy(cx, inputDicts[i].cx)
+				cx = append([]mqCx(nil), inputDicts[i].cx...)
+				if inputDicts[i].gr != nil {
+					gr = append([]mqCx(nil), inputDicts[i].gr...)
+				}
 			}
 		}
 		if cx == nil {
@@ -90,15 +97,33 @@ func (d *decoder) decodeSymbolDict(data []byte, inputDicts []*symbolDict) (*symb
 	} else {
 		cx = make([]mqCx, 1<<16)
 	}
+	// 6.5.8.2: aggregate and refined symbols are coded as text regions
+	// over the input symbols and the new ones decoded so far, with one set
+	// of contexts for the whole dictionary and IDs wide enough for every
+	// symbol it will hold.
+	var tc *textCtx
+	if sdRefAgg {
+		tc = newTextCtx(symCodeLen(len(input) + int(numNew)))
+		if gr == nil {
+			gr = make([]mqCx, refineContexts)
+		}
+		tc.gr = gr
+	}
+	var iaai intCtx
 
 	mq := newMQDecoder(r.rest())
 	var iadh, iadw, iaex intCtx
-	newSyms := make([]*bitmap, 0, numNew)
+	// all is the input symbols followed by the new ones as they are
+	// decoded: what aggregate symbols refer to, and what export flags
+	// select from.
+	all := make([]*bitmap, len(input), len(input)+int(numNew))
+	copy(all, input)
+	newSyms := 0
 	hcHeight := 0
 	// 6.5.5 step 4: height classes until all new symbols are decoded. A
 	// class normally holds at least one symbol; empty classes are
 	// tolerated but capped so exhausted data cannot spin forever.
-	for classes := 0; len(newSyms) < int(numNew); classes++ {
+	for classes := 0; newSyms < int(numNew); classes++ {
 		if classes > 2*int(numNew)+2 {
 			return nil, errors.New("too many empty height classes")
 		}
@@ -116,7 +141,7 @@ func (d *decoder) decodeSymbolDict(data []byte, inputDicts []*symbolDict) (*symb
 			if !ok {
 				break // OOB ends the height class
 			}
-			if len(newSyms) >= int(numNew) {
+			if newSyms >= int(numNew) {
 				return nil, errors.New("symbol dictionary decodes more symbols than declared")
 			}
 			symWidth += int(dw)
@@ -126,20 +151,23 @@ func (d *decoder) decodeSymbolDict(data []byte, inputDicts []*symbolDict) (*symb
 			if err := d.charge(symWidth, hcHeight); err != nil {
 				return nil, err
 			}
-			gp.w, gp.h = symWidth, hcHeight
-			bm, err := decodeGeneric(&gp, mq, cx)
+			var bm *bitmap
+			if sdRefAgg {
+				bm, err = d.decodeAggregate(mq, &iaai, tc, all, symWidth, hcHeight, rTemplate, rAT)
+			} else {
+				gp.w, gp.h = symWidth, hcHeight
+				bm, err = decodeGeneric(&gp, mq, cx)
+			}
 			if err != nil {
 				return nil, err
 			}
-			newSyms = append(newSyms, bm)
+			all = append(all, bm)
+			newSyms++
 		}
 	}
 
 	// 6.5.10: export flags as alternating runs of non-exported/exported
 	// symbols over the concatenation of input and new symbols.
-	all := make([]*bitmap, 0, len(input)+len(newSyms))
-	all = append(all, input...)
-	all = append(all, newSyms...)
 	exported := make([]*bitmap, 0, numEx)
 	cur := false
 	// Each non-zero run advances i; zero-length runs only flip the flag,
@@ -163,7 +191,46 @@ func (d *decoder) decodeSymbolDict(data []byte, inputDicts []*symbolDict) (*symb
 	}
 	sd := &symbolDict{exported: exported}
 	if ctxRetained {
-		sd.cx = cx
+		sd.cx, sd.gr = cx, gr
 	}
 	return sd, nil
+}
+
+// decodeAggregate decodes one symbol of a dictionary with SDREFAGG set
+// (6.5.8.2): REFAGGNINST instances of earlier symbols drawn as a text
+// region, or, for a single instance, one earlier symbol refined.
+func (d *decoder) decodeAggregate(mq *mqDecoder, iaai *intCtx, tc *textCtx, syms []*bitmap, w, h int, rTemplate uint8, rAT [2][2]int) (*bitmap, error) {
+	n, ok := mq.decodeInt(iaai)
+	if !ok || n <= 0 || n > maxInstances {
+		return nil, fmt.Errorf("invalid aggregate instance count %d", n)
+	}
+	if n > 1 {
+		t := textRegion{
+			numInst:   uint32(n),
+			refine:    true,
+			rTemplate: rTemplate,
+			rAT:       rAT,
+			refCorner: refTopLeft,
+			combOp:    opOr,
+		}
+		bm, err := newBitmap(w, h)
+		if err != nil {
+			return nil, err
+		}
+		if err := d.decodeTextInstances(&t, bm, syms, mq, tc); err != nil {
+			return nil, err
+		}
+		return bm, nil
+	}
+	id := mq.decodeIAID(tc.iaid, tc.codeLen)
+	if int(id) >= len(syms) {
+		return nil, fmt.Errorf("refined symbol ID %d out of range (%d symbols)", id, len(syms))
+	}
+	rdx, ok1 := mq.decodeInt(&tc.iardx)
+	rdy, ok2 := mq.decodeInt(&tc.iardy)
+	if !ok1 || !ok2 {
+		return nil, errors.New("OOB refinement offset")
+	}
+	p := refineParams{w: w, h: h, template: rTemplate, at: rAT, ref: syms[id], dx: int(rdx), dy: int(rdy)}
+	return decodeRefinement(&p, mq, tc.gr)
 }

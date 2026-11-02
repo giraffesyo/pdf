@@ -244,7 +244,233 @@ func syntheticCases() []synthCase {
 			add("synth-text-features", want, w.buf, nil)
 		}
 	}
+	cases = append(cases, refinementCases()...)
 	return cases
+}
+
+// refinementCases builds the refinement streams: refinement regions over
+// the page and over an intermediate region, refined text instances, and
+// dictionaries of refined and aggregate symbols, across both templates,
+// moved AT pixels and typical prediction.
+func refinementCases() []synthCase {
+	var cases []synthCase
+	add := func(name string, want *bitmap, page, globals []byte, roundTripOnly bool) {
+		cases = append(cases, synthCase{name: name, page: page, globals: globals, want: want, roundTripOnly: roundTripOnly})
+	}
+	nominalRAT := [2][2]int{{-1, -1}, {-1, -1}}
+	movedRAT := [2][2]int{{-2, -1}, {2, 1}}
+
+	// A refinement region over the page: a generic region draws img, and
+	// the refinement replaces it with an edited copy. jbig2dec refines
+	// the whole page without offsetting it by the region's location, so
+	// the region sits at the origin where the two readings agree.
+	img := testImage(133, 61)
+	edited, _ := newBitmap(img.w, img.h)
+	edited.compose(img, 0, 0, opOr)
+	for y := 5; y < img.h; y += 7 {
+		for x := y % 11; x < img.w; x += 13 {
+			edited.data[y*edited.stride+x>>3] ^= 0x80 >> uint(x&7)
+		}
+	}
+	for _, c := range []struct {
+		name     string
+		template uint8
+		at       [2][2]int
+		tpgron   bool
+	}{
+		{"t0", 0, nominalRAT, false},
+		{"t0-at", 0, movedRAT, false},
+		{"t0-tpgron", 0, nominalRAT, true},
+		{"t1", 1, nominalRAT, false},
+		{"t1-tpgron", 1, nominalRAT, true},
+	} {
+		gp := &genericParams{template: 0, at: nominalAT[0]}
+		w := &segWriter{}
+		w.segment(segPageInfo, nil, pageInfoData(img.w, img.h, false, 0, opOr), false)
+		w.segment(segGenericImmediate, nil, genericRegionData(img, 0, 0, opOr, gp, false), false)
+		w.segment(segRefinementImmediate, nil, refinementRegionData(edited, img, 0, 0, opReplace, c.template, c.at, c.tpgron), false)
+		w.segment(segEndOfPage, nil, nil, false)
+		add("synth-refine-region-"+c.name, edited, w.buf, nil, false)
+	}
+
+	// An intermediate text region refined into place: the intermediate
+	// result is not drawn, and the refinement of it is, at an offset.
+	syms := []*bitmap{glyph(0, 9, 11), glyph(1, 7, 11), glyph(2, 12, 9), glyph(3, 10, 10)}
+	{
+		inst := []textInstance{{id: 0, x: 1, y: 2}, {id: 1, x: 12, y: 2}, {id: 2, x: 21, y: 4}, {id: 3, x: 35, y: 1}}
+		tw, th := 48, 14
+		inter, _ := newBitmap(tw, th)
+		for _, in := range inst {
+			inter.compose(syms[in.id], in.x, in.y, opOr)
+		}
+		refined, _ := newBitmap(tw, th)
+		refined.compose(inter, 0, 0, opOr)
+		for x := 0; x < tw; x += 5 {
+			refined.data[(th/2)*refined.stride+x>>3] ^= 0x80 >> uint(x&7)
+		}
+		pw, ph := 70, 30
+		want, _ := newBitmap(pw, ph)
+		want.compose(refined, 9, 7, opOr)
+		w := &segWriter{}
+		d := w.segment(segSymbolDict, nil, symbolDictData(&symbolDictSpec{syms: sortSyms(syms), at: nominalAT[0]}, make([]mqCx, 1<<16)), false)
+		w.segment(segPageInfo, nil, pageInfoData(pw, ph, false, 0, opOr), false)
+		spec := &textRegionSpec{w: tw, h: th, op: opOr, syms: sortSyms(syms), inst: remapInst(inst, syms), refCorner: refTopLeft}
+		t := w.segment(segTextRegionIntermediate, []uint32{d}, textRegionData(spec), false)
+		w.segment(segRefinementImmediate, []uint32{t}, refinementRegionData(refined, inter, 9, 7, opOr, 0, nominalRAT, true), false)
+		w.segment(segEndOfPage, nil, nil, false)
+		add("synth-refine-intermediate", want, w.buf, nil, false)
+	}
+
+	// Refined text instances: grown, shrunk and shifted symbols among
+	// plain ones, in both refinement templates.
+	sorted := sortSyms(syms)
+	for _, c := range []struct {
+		name     string
+		template uint8
+		at       [2][2]int
+	}{
+		{"t0", 0, nominalRAT},
+		{"t0-at", 0, movedRAT},
+		{"t1", 1, nominalRAT},
+	} {
+		inst := []textInstance{
+			{id: 0, x: 2, y: 3},
+			{id: 1, x: 16, y: 3, refined: refine(sorted[1], 3, 2, 0, 0)},
+			{id: 2, x: 34, y: 4, refined: refine(sorted[2], -2, -1, 1, -1)},
+			{id: 3, x: 50, y: 3},
+			{id: 0, x: 2, y: 24, refined: refine(sorted[0], 0, 0, -1, 1)},
+			{id: 3, x: 20, y: 24, refined: refine(sorted[3], 5, -3, 2, 0)},
+		}
+		pw, ph := 72, 44
+		want, _ := newBitmap(pw, ph)
+		for _, in := range inst {
+			want.compose(in.drawn(sorted), in.x, in.y, opOr)
+		}
+		w := &segWriter{}
+		d := w.segment(segSymbolDict, nil, symbolDictData(&symbolDictSpec{syms: sorted, at: nominalAT[0]}, make([]mqCx, 1<<16)), false)
+		w.segment(segPageInfo, nil, pageInfoData(pw, ph, false, 0, opOr), false)
+		spec := &textRegionSpec{w: pw, h: ph, op: opOr, syms: sorted, inst: inst, refCorner: refTopLeft, refine: true, rTemplate: c.template, rAT: c.at}
+		w.segment(segTextRegionImmediate, []uint32{d}, textRegionData(spec), false)
+		w.segment(segEndOfPage, nil, nil, false)
+		add("synth-text-refined-"+c.name, want, w.buf, nil, false)
+	}
+
+	// Refined and aggregate symbols: a plain dictionary in the globals,
+	// and a dictionary of symbols refined from it or assembled from its
+	// symbols and its own earlier ones, which a text region then draws.
+	// The ctxreuse variant retains the first refagg dictionary's contexts
+	// and reuses them in a second, which jbig2dec does not implement.
+	// jbig2dec also leaves SBRAT at (0, 0) instead of SDRAT (Table 17) in
+	// the text region an aggregate is drawn with, and rejects that as out
+	// of field, so an instance refined inside an aggregate is checked
+	// against it only with template 1, which has no AT pixels; the
+	// template 0 variant is round-trip only.
+	for _, c := range []struct {
+		name        string
+		template    uint8
+		at          [2][2]int
+		refineInAgg bool
+		ctxReuse    bool
+		jbig2decGap bool
+	}{
+		{"t0", 0, nominalRAT, false, false, false},
+		{"t1", 1, movedRAT, true, false, false},
+		{"t0-refined", 0, movedRAT, true, false, true},
+		{"ctxreuse", 0, movedRAT, true, true, true},
+	} {
+		base := sorted
+		single := refine(base[1], 1, 1, 0, 0).bm // a refinement of base[1]
+		pair := aggregate(base, 22, 12, []textInstance{{id: 0, x: 0, y: 0}, {id: 1, x: 10, y: 1}})
+		// The third aggregates an earlier new symbol (single, index 4)
+		// and a refined base symbol.
+		trioInst := []textInstance{
+			{id: 4, x: 0, y: 0},
+			{id: 3, x: 9, y: 1},
+			{id: 2, x: 21, y: 2},
+		}
+		if c.refineInAgg {
+			trioInst[1].refined = refine(base[3], 1, 0, 0, 0)
+		}
+		newSyms := []*bitmap{single, pair}
+		agg := []aggSym{{id: 1}, {inst: []textInstance{{id: 0, x: 0, y: 0}, {id: 1, x: 10, y: 1}}}}
+		trio := aggregate(append(append([]*bitmap(nil), base...), newSyms...), 34, 13, trioInst)
+		newSyms = append(newSyms, trio)
+		agg = append(agg, aggSym{inst: trioInst})
+		// Height classes run in ascending height: 8x12, 22x12, 34x13.
+		for i := 1; i < len(newSyms); i++ {
+			if newSyms[i].h < newSyms[i-1].h || newSyms[i].h == newSyms[i-1].h && newSyms[i].w < newSyms[i-1].w {
+				panic("refagg symbols out of coding order")
+			}
+		}
+
+		gw := &segWriter{}
+		d1 := gw.segment(segSymbolDict, nil, symbolDictData(&symbolDictSpec{syms: base, at: nominalAT[0]}, make([]mqCx, 1<<16)), false)
+		gr := make([]mqCx, refineContexts)
+		spec2 := &symbolDictSpec{
+			syms: newSyms, numInput: len(base), inputSyms: base, at: nominalAT[0],
+			refAgg: true, rTemplate: c.template, rAT: c.at, agg: agg, gr: gr, ctxRetained: c.ctxReuse,
+		}
+		cx := make([]mqCx, 1<<16)
+		w := &segWriter{next: gw.next}
+		d2 := w.segment(segSymbolDict, []uint32{d1}, symbolDictData(spec2, cx), false)
+		exports := newSyms
+		refs := []uint32{d2}
+		if c.ctxReuse {
+			// A second refagg dictionary over d2's exports, coded with
+			// the contexts d2 left behind.
+			more := refine(newSyms[0], 2, 0, 0, 0).bm
+			spec3 := &symbolDictSpec{
+				syms: []*bitmap{more}, numInput: len(newSyms), inputSyms: newSyms, at: nominalAT[0],
+				refAgg: true, rTemplate: c.template, rAT: c.at, agg: []aggSym{{id: 0}}, gr: gr, ctxUsed: true,
+			}
+			refs = append(refs, w.segment(segSymbolDict, []uint32{d2}, symbolDictData(spec3, cx), false))
+			exports = append(append([]*bitmap(nil), newSyms...), more)
+		}
+		w.segment(segPageInfo, nil, pageInfoData(90, 40, false, 0, opOr), false)
+		var inst []textInstance
+		x := 1
+		for i := range exports {
+			inst = append(inst, textInstance{id: i, x: x, y: 2 + i%2*18})
+			x += exports[i].w + 2
+		}
+		pw, ph := 90, 40
+		want, _ := newBitmap(pw, ph)
+		for _, in := range inst {
+			want.compose(exports[in.id], in.x, in.y, opOr)
+		}
+		spec := &textRegionSpec{w: pw, h: ph, op: opOr, syms: exports, inst: inst, refCorner: refTopLeft}
+		w.segment(segTextRegionImmediate, refs, textRegionData(spec), false)
+		w.segment(segEndOfPage, nil, nil, false)
+		add("synth-symbol-refagg-"+c.name, want, w.buf, gw.buf, c.jbig2decGap)
+	}
+	return cases
+}
+
+// sortSyms returns syms in symbol dictionary coding order: ascending
+// height, then ascending width.
+func sortSyms(syms []*bitmap) []*bitmap {
+	out := append([]*bitmap(nil), syms...)
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && (out[j].h < out[j-1].h || out[j].h == out[j-1].h && out[j].w < out[j-1].w); j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// remapInst renumbers instances of syms to the order sortSyms gives.
+func remapInst(inst []textInstance, syms []*bitmap) []textInstance {
+	sorted := sortSyms(syms)
+	out := append([]textInstance(nil), inst...)
+	for i := range out {
+		sym := syms[out[i].id]
+		for j, s := range sorted {
+			if s == sym {
+				out[i].id = j
+			}
+		}
+	}
+	return out
 }
 
 func itoa(i int) string {

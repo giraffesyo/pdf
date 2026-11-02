@@ -373,10 +373,22 @@ type symbolDictSpec struct {
 	at           [4][2]int
 	ctxUsed      bool
 	ctxRetained  bool
+	// With refAgg every new symbol is coded as agg[i] describes, against
+	// inputSyms followed by the new symbols before it; gr is the shared
+	// refinement context set, which may come from a retained dictionary.
+	refAgg    bool
+	rTemplate uint8
+	rAT       [2][2]int
+	agg       []aggSym
+	inputSyms []*bitmap
+	gr        []mqCx
 }
 
 func symbolDictData(s *symbolDictSpec, cx []mqCx) []byte {
-	flags := uint16(s.template) << 10
+	flags := uint16(s.template)<<10 | uint16(s.rTemplate)<<12
+	if s.refAgg {
+		flags |= 1 << 1
+	}
 	if s.ctxUsed {
 		flags |= 1 << 8
 	}
@@ -392,6 +404,9 @@ func symbolDictData(s *symbolDictSpec, cx []mqCx) []byte {
 	for i := range nAT {
 		b = append(b, i8(s.at[i][0]), i8(s.at[i][1]))
 	}
+	if s.refAgg && s.rTemplate == 0 {
+		b = append(b, i8(s.rAT[0][0]), i8(s.rAT[0][1]), i8(s.rAT[1][0]), i8(s.rAT[1][1]))
+	}
 	numEx := len(s.syms)
 	if s.exportInputs {
 		numEx += s.numInput
@@ -402,8 +417,16 @@ func symbolDictData(s *symbolDictSpec, cx []mqCx) []byte {
 	// Order: the new symbol numbering follows coding order, so callers
 	// must supply syms already sorted by (height, width).
 	e := newMQEncoder()
-	var iadh, iadw, iaex intCtx
+	var iadh, iadw, iaex, iaai intCtx
 	gp := &genericParams{template: s.template, at: s.at}
+	var tc *textEncCtx
+	all := append([]*bitmap(nil), s.inputSyms...)
+	if s.refAgg {
+		tc = newTextEncCtx(s.numInput + len(s.syms))
+		if s.gr != nil {
+			tc.gr = s.gr
+		}
+	}
 	hc := 0
 	for i := 0; i < len(s.syms); {
 		h := s.syms[i].h
@@ -413,7 +436,12 @@ func symbolDictData(s *symbolDictSpec, cx []mqCx) []byte {
 		for i < len(s.syms) && s.syms[i].h == h {
 			e.encodeInt(&iadw, s.syms[i].w-w, false)
 			w = s.syms[i].w
-			encodeGeneric(e, cx, s.syms[i], gp)
+			if s.refAgg {
+				encodeAggregate(e, tc, &iaai, s, all, i)
+			} else {
+				encodeGeneric(e, cx, s.syms[i], gp)
+			}
+			all = append(all, s.syms[i])
 			i++
 		}
 		e.encodeInt(&iadw, 0, true) // OOB ends the height class
@@ -431,8 +459,9 @@ func symbolDictData(s *symbolDictSpec, cx []mqCx) []byte {
 
 // textInstance places symbol id with its top-left corner at (x, y).
 type textInstance struct {
-	id   int
-	x, y int
+	id      int
+	x, y    int
+	refined *refinedInst // drawn instead of the symbol when set (RI = 1)
 }
 
 type textRegionSpec struct {
@@ -447,7 +476,9 @@ type textRegionSpec struct {
 	combOp     combOp
 	defPixel   int
 	dsOffset   int
-	refine     bool // SBREFINE=1 with every RI = 0
+	refine     bool // SBREFINE: each instance codes RI
+	rTemplate  uint8
+	rAT        [2][2]int
 }
 
 // textRegionData builds a text region segment body (7.4.4) by the
@@ -462,11 +493,21 @@ func textRegionData(s *textRegionSpec) []byte {
 	if s.refine {
 		flags |= 1 << 1
 	}
+	flags |= uint16(s.rTemplate) << 15
 	b = binary.BigEndian.AppendUint16(b, flags)
-	if s.refine {
-		b = append(b, 0, 0, 0, 0) // refinement AT (template 0), unused for RI = 0
+	if s.refine && s.rTemplate == 0 {
+		b = append(b, i8(s.rAT[0][0]), i8(s.rAT[0][1]), i8(s.rAT[1][0]), i8(s.rAT[1][1]))
 	}
 	b = binary.BigEndian.AppendUint32(b, u32(len(s.inst)))
+	e := newMQEncoder()
+	encodeTextInstances(e, newTextEncCtx(len(s.syms)), s)
+	return append(b, e.flush()...)
+}
+
+// encodeTextInstances codes the instances of s by the inverse of 6.4.5:
+// instances are grouped into strips by their T coordinate and sorted by S
+// within a strip.
+func encodeTextInstances(e *mqEncoder, tc *textEncCtx, s *textRegionSpec) {
 
 	strips := 1 << s.logStrips
 	type placed struct {
@@ -474,10 +515,10 @@ func textRegionData(s *textRegionSpec) []byte {
 		s, t, span int // span: how far CURS advances (w-1 or h-1)
 	}
 	var ps []placed
-	for _, in := range s.inst {
-		sym := s.syms[in.id]
+	for i, in := range s.inst {
+		sym := in.drawn(s.syms)
 		var p placed
-		p.id = in.id
+		p.id = i
 		switch {
 		case !s.transposed:
 			p.s = in.x
@@ -516,39 +557,35 @@ func textRegionData(s *textRegionSpec) []byte {
 		}
 	}
 
-	e := newMQEncoder()
-	codeLen := symCodeLen(len(s.syms))
-	iaid := make([]mqCx, 1<<(codeLen+1))
-	var iadt, iafs, iads, iait, iari intCtx
-	e.encodeInt(&iadt, 0, false) // STRIPT = 0
+	e.encodeInt(&tc.iadt, 0, false) // STRIPT = 0
 	stript, firsts := 0, 0
 	for i := 0; i < len(ps); {
 		stripT := floorDiv(ps[i].t, strips) * strips
-		e.encodeInt(&iadt, (stripT-stript)/strips, false)
+		e.encodeInt(&tc.iadt, (stripT-stript)/strips, false)
 		stript = stripT
-		e.encodeInt(&iafs, ps[i].s-firsts, false)
+		e.encodeInt(&tc.iafs, ps[i].s-firsts, false)
 		firsts = ps[i].s
 		curs := firsts
 		first := true
 		for ; i < len(ps) && floorDiv(ps[i].t, strips)*strips == stripT; i++ {
 			p := ps[i]
 			if !first {
-				e.encodeInt(&iads, p.s-curs-s.dsOffset, false)
+				e.encodeInt(&tc.iads, p.s-curs-s.dsOffset, false)
 			}
 			first = false
 			curs = p.s
 			if strips > 1 {
-				e.encodeInt(&iait, p.t-stript, false)
+				e.encodeInt(&tc.iait, p.t-stript, false)
 			}
-			e.encodeIAID(iaid, codeLen, u32(p.id))
+			in := s.inst[p.id]
+			e.encodeIAID(tc.iaid, tc.codeLen, u32(in.id))
 			if s.refine {
-				e.encodeInt(&iari, 0, false)
+				encodeRefinedInst(e, tc, s.syms[in.id], in.refined, s.rTemplate, s.rAT)
 			}
 			curs += p.span
 		}
-		e.encodeInt(&iads, 0, true) // OOB: end of strip
+		e.encodeInt(&tc.iads, 0, true) // OOB: end of strip
 	}
-	return append(b, e.flush()...)
 }
 
 // testImage draws a deterministic picture with enough structure to
@@ -657,4 +694,24 @@ func i8(n int) byte {
 
 func pbmBytes(bm *bitmap) []byte {
 	return append([]byte(fmt.Sprintf("P4\n%d %d\n", bm.w, bm.h)), bm.data...)
+}
+
+// encodeAggregate codes new symbol i of a dictionary with SDREFAGG as
+// s.agg[i] describes (6.5.8.2), against the symbols in all.
+func encodeAggregate(e *mqEncoder, tc *textEncCtx, iaai *intCtx, s *symbolDictSpec, all []*bitmap, i int) {
+	a := s.agg[i]
+	sym := s.syms[i]
+	if len(a.inst) > 1 {
+		e.encodeInt(iaai, len(a.inst), false)
+		encodeTextInstances(e, tc, &textRegionSpec{
+			syms: all, inst: a.inst, refCorner: refTopLeft, combOp: opOr,
+			refine: true, rTemplate: s.rTemplate, rAT: s.rAT,
+		})
+		return
+	}
+	e.encodeInt(iaai, 1, false)
+	e.encodeIAID(tc.iaid, tc.codeLen, u32(a.id))
+	e.encodeInt(&tc.iardx, a.rdx, false)
+	e.encodeInt(&tc.iardy, a.rdy, false)
+	encodeRefinement(e, tc.gr, sym, &refineParams{template: s.rTemplate, at: s.rAT, ref: all[a.id], dx: a.rdx, dy: a.rdy})
 }
