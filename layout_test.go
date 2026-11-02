@@ -160,8 +160,9 @@ func TestLayoutWordGaps(t *testing.T) {
 
 // TestOffPageText: a line drawn wholly outside the media box is on no
 // page and leaves the text, in every mode; a line that starts on the page
-// and runs past its edge stays whole; KeepOffPageText keeps everything,
-// and Glyphs reports everything either way.
+// and runs past its edge stays whole; the facing page of a spread, drawn
+// on the page's baselines beyond a gutter, goes; KeepOffPageText keeps
+// everything, and Glyphs reports everything either way.
 func TestOffPageText(t *testing.T) {
 	page := Page{
 		MediaBox: Rect{MaxX: 200, MaxY: 200},
@@ -170,16 +171,18 @@ func TestOffPageText(t *testing.T) {
 			run("running past the edge", 150, 120, 6, 10),
 			run("above the page", 10, 400, 6, 10),
 			run("left of it", -300, 100, 6, 10),
+			run("facing page", -100, 60, 6, 10),
+			run("this page", 20, 60, 6, 10),
 		),
 	}
-	want := "on the page\nrunning past the edge"
+	want := "on the page\nrunning past the edge\nthis page"
 	for _, mode := range []LayoutMode{LayoutPosition, LayoutContentOrder, LayoutColumns} {
 		if got := page.TextWithOptions(LayoutOptions{Mode: mode}); got != want {
 			t.Errorf("mode %d: text = %q, want %q", mode, got, want)
 		}
 	}
 	if got := page.TextWithOptions(LayoutOptions{KeepOffPageText: true}); !strings.Contains(got, "above the page") ||
-		!strings.Contains(got, "left of it") {
+		!strings.Contains(got, "left of it") || !strings.Contains(got, "facing page") {
 		t.Errorf("KeepOffPageText text = %q", got)
 	}
 }
