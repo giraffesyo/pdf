@@ -208,16 +208,17 @@ func TestLayoutScripts(t *testing.T) {
 }
 
 // FuzzLayout builds pages of glyphs from fuzz input — Latin, Arabic,
-// Hebrew, CJK, digits, and spaces at arbitrary positions, sizes, and
-// directions — and checks what every layout mode must keep whatever it
-// reorders: with duplicates and off-page text kept, the text holds
-// exactly the glyphs' characters other than whitespace, each once.
+// Hebrew and their marks, CJK, digits, and spaces at arbitrary
+// positions, sizes, and directions — and checks what every layout mode
+// must keep whatever it reorders: with duplicates and off-page text
+// kept, the text holds exactly the glyphs' characters other than
+// whitespace, each once.
 func FuzzLayout(f *testing.F) {
 	f.Add([]byte("\x01\x10\x10\x0a\x05\x00\x02\x12\x10\x0a\x05\x00\x03\x30\x20\x0a\x05\x00"))
 	f.Add([]byte("\x10\x10\x10\x08\x04\x00\x11\x14\x10\x08\x04\x00\x12\x18\x10\x08\x04\x00\x05\x50\x10\x08\x04\x00"))
 	f.Add([]byte("\x14\x10\x40\x14\x0a\x01\x15\x10\x38\x14\x0a\x01\x16\x40\x40\x06\x03\x03"))
 	alphabet := []string{" ", "a", "b", "c", "d", "e", "A", "1", "2", ".", ",", "-",
-		"(", ")", "ب", "ت", "ث", "א", "ב", "ג", "中", "文", "ﬁ", "fi", "é"}
+		"(", ")", "ب", "ت", "ث", "א", "ב", "ג", "中", "文", "ﬁ", "fi", "é", "\u05b4", "\u064e"}
 	dirs := []Point{{X: 1}, {Y: 1}, {Y: -1}, {X: -1}, {X: 0.6, Y: 0.8}}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var glyphs []Glyph
