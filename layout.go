@@ -33,9 +33,13 @@ func reconstructPositionText(page Page, layout LayoutOptions) string {
 	}
 	lines := buildLayoutLines(page.Glyphs, layout.KeepDuplicateGlyphs)
 	if !layout.KeepOffPageText && pageBoxSet(page.MediaBox) {
-		lines = slices.DeleteFunc(lines, func(line layoutLine) bool {
-			return !lineOnPage(line, page.MediaBox)
-		})
+		kept := lines[:0]
+		for i := range lines {
+			if clipLineToPage(&lines[i], page.MediaBox) {
+				kept = append(kept, lines[i])
+			}
+		}
+		lines = kept
 	}
 	sc, _ := orderScratchPool.Get().(*orderScratch)
 	defer putOrderScratch(sc)
@@ -63,18 +67,60 @@ func lineHasText(line layoutLine) bool {
 	return false
 }
 
-// lineOnPage reports whether any of a line's glyphs reach onto the page.
 // Text wholly outside the media box — a form larger than the page,
 // content positioned off it — is on no page, and pdftotext and MuPDF do
 // not extract it; a line that starts on the page and runs past its edge
 // is kept whole.
-func lineOnPage(line layoutLine, box Rect) bool {
+//
+// offPageGap is the gap, in font sizes, that separates text on the page
+// from text beyond its edge that merely shares the baseline: the facing
+// page of a spread that every page of an exported spread draws.
+const offPageGap = 2.0
+
+// clipLineToPage drops the parts of a line that lie wholly off the page
+// and reports whether anything is left. A line that runs on past the
+// page's edge stays whole; only stretches of text separated from the
+// page's by a gap wider than offPageGap ems go, as the facing page of a
+// spread does when both pages' lines share a baseline.
+func clipLineToPage(line *layoutLine, box Rect) bool {
+	on, off := 0, 0
 	for _, g := range line.glyphs {
 		if rectsIntersect(glyphRect(*g.Glyph), box) {
-			return true
+			on++
+		} else {
+			off++
 		}
 	}
-	return false
+	if off == 0 || on == 0 {
+		return on > 0
+	}
+	gap := offPageGap * max(line.size, 1)
+	kept := line.glyphs[:0]
+	for i := 0; i < len(line.glyphs); {
+		// One stretch: glyphs no further than gap from the furthest end
+		// so far.
+		j, end, onPage := i, math.Inf(-1), false
+		for ; j < len(line.glyphs); j++ {
+			g := line.glyphs[j].Glyph
+			if j > i && glyphProjection(*g, line.dir, false)-end > gap {
+				break
+			}
+			end = max(end, glyphProjection(*g, line.dir, true))
+			onPage = onPage || rectsIntersect(glyphRect(*g), box)
+		}
+		if onPage {
+			kept = append(kept, line.glyphs[i:j]...)
+		}
+		i = j
+	}
+	line.glyphs = kept
+	line.first = slices.MinFunc(kept, func(a, b layoutGlyph) int { return a.index - b.index }).index
+	line.size, line.end = 0, math.Inf(-1)
+	for _, g := range kept {
+		line.size = max(line.size, g.Size)
+		line.end = max(line.end, glyphProjection(*g.Glyph, line.dir, true))
+	}
+	return true
 }
 
 func buildLayoutLines(glyphs []Glyph, keepDuplicates bool) []layoutLine {
