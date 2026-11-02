@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.9.0](https://github.com/giraffesyo/pdf/compare/v0.8.0...v0.9.0) (2026-11-02)
+
+
+### Features
+
+* decode JBIG2 refinement and aggregate symbols ([#73](https://github.com/giraffesyo/pdf/issues/73)) ([f7b6771](https://github.com/giraffesyo/pdf/commit/f7b67714ea9150eab6477abf2828ecbf210b8dac))
+
+
+### Bug Fixes
+
+* **deps:** build with Go 1.27.3, which distrusts eMudhra's compromised intermediate CAs ([#70](https://github.com/giraffesyo/pdf/issues/70)) ([5c3abc1](https://github.com/giraffesyo/pdf/commit/5c3abc1e587585ac434b292caefacc90f2ec29a2))
+* keep Arabic and Hebrew marks with their letters ([#77](https://github.com/giraffesyo/pdf/issues/77)) ([76b1c91](https://github.com/giraffesyo/pdf/commit/76b1c918aacfbfdde1d5dbdc41707dc39e340bb4))
+* leave the facing page of an exported spread out of the text ([#75](https://github.com/giraffesyo/pdf/issues/75)) ([a478b0a](https://github.com/giraffesyo/pdf/commit/a478b0a4f5f379366f56af2dcd3c23921a19506a))
+* make embedded TrueType cmap fallback text deterministic ([#76](https://github.com/giraffesyo/pdf/issues/76)) ([1dfb6a9](https://github.com/giraffesyo/pdf/commit/1dfb6a9abaaaae8938cdf747115fa91985645b55))
+
+
+### Performance
+
+* decode each JBIG2Globals stream once per document ([#74](https://github.com/giraffesyo/pdf/issues/74)) ([9a2fd0a](https://github.com/giraffesyo/pdf/commit/9a2fd0a2b5c6bdd363bd5a7dc28ca0cd7b03b169))
+* expand one-bit grey images eight pixels at a time ([#72](https://github.com/giraffesyo/pdf/issues/72)) ([b1a579c](https://github.com/giraffesyo/pdf/commit/b1a579ca9b0a31167acd4d9855466d59205d7a2a))
+
 ## [0.8.0](https://github.com/giraffesyo/pdf/compare/v0.7.0...v0.8.0) (2026-10-10)
 
 
