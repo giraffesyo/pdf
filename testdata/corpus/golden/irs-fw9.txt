@@ -1,8 +1,11 @@
-Form  W-9 Request for Taxpayer Give form to the
-(Rev. March 2024) Identification Number and Certification requester. Do not
-Department of the Treasury  send to the IRS.
+Form  W-9 Request for Taxpayer
+(Rev. March 2024) Identification Number and Certification
+Department of the Treasury
 Internal Revenue Service Go to www.irs.gov/FormW9 for instructions and the latest information.
 Before you begin. For guidance related to the purpose of Form W-9, see Purpose of Form, below.
+Give form to the
+requester. Do not
+send to the IRS.
 1    Name of entity/individual. An entry is required. (For a sole proprietor or disregarded entity, enter the owner’s name on line 1, and enter the business/disregarded
 entity’s name on line 2.)
 2    Business name/disregarded entity name, if different from above.
@@ -502,73 +505,123 @@ the Code.
 Caution: A disregarded U.S. entity that has a foreign owner must use
 the appropriate Form W-8.
 
-Form W-9 (Rev. 3-2024) Page 5
-Part II. Certification For this type of account: Give name and EIN of:
-To establish to the withholding agent that you are a U.S. person, or 8. Disregarded entity not owned by an The owner
-resident alien, sign Form W-9. You may be requested to sign by the individual
-withholding agent even if item 1, 4, or 5 below indicates otherwise. 9. A valid trust, estate, or pension trust Legal entity4
-For a joint account, only the person whose TIN is shown in Part I 10. Corporation or LLC electing corporate The corporation
-should sign (when required). In the case of a disregarded entity, the status on Form 8832 or Form 2553
-person identified on line 1 must sign. Exempt payees, see Exempt payee 11. Association, club, religious, charitable, The organization
-code, earlier. educational, or other tax-exempt
-Signature requirements. Complete the certification as indicated in organization
-items 1 through 5 below. 12. Partnership or multi-member LLC The partnership
-1. Interest, dividend, and barter exchange accounts opened 13. A broker or registered nominee The broker or nominee
-before 1984 and broker accounts considered active during 1983. 14. Account with the Department of The public entity
-You must give your correct TIN, but you do not have to sign the Agriculture in the name of a public
-certification. entity (such as a state or local
-government, school district, or prison)
-2. Interest, dividend, broker, and barter exchange accounts that receives agricultural program
-opened after 1983 and broker accounts considered inactive during payments
+Form W-9 (Rev. 3-2024)
+Part II. Certification
+To establish to the withholding agent that you are a U.S. person, or
+resident alien, sign Form W-9. You may be requested to sign by the
+withholding agent even if item 1, 4, or 5 below indicates otherwise.
+For a joint account, only the person whose TIN is shown in Part I
+should sign (when required). In the case of a disregarded entity, the
+person identified on line 1 must sign. Exempt payees, see Exempt payee
+code, earlier.
+Signature requirements. Complete the certification as indicated in
+items 1 through 5 below.
+1. Interest, dividend, and barter exchange accounts opened
+before 1984 and broker accounts considered active during 1983.
+You must give your correct TIN, but you do not have to sign the
+certification.
+2. Interest, dividend, broker, and barter exchange accounts
+opened after 1983 and broker accounts considered inactive during
 1983. You must sign the certification or backup withholding will apply. If
-15. Grantor trust filing Form 1041 or The trust
-you are subject to backup withholding and you are merely providing under the Optional Filing Method 2,
-your correct TIN to the requester, you must cross out item 2 in the requiring Form 1099 (see Regulations
-certification before signing the form. section 1.671-4(b)(2)(i)(B))**
-3. Real estate transactions. You must sign the certification. You may 1
-cross out item 2 of the certification. List first and circle the name of the person whose number you furnish.
-If only one person on a joint account has an SSN, that person’s number
-4. Other payments. You must give your correct TIN, but you do not must be furnished.
+you are subject to backup withholding and you are merely providing
+your correct TIN to the requester, you must cross out item 2 in the
+certification before signing the form.
+3. Real estate transactions. You must sign the certification. You may
+cross out item 2 of the certification.
+4. Other payments. You must give your correct TIN, but you do not
 have to sign the certification unless you have been notified that you
-2 Circle the minor’s name and furnish the minor’s SSN.
 have previously given an incorrect TIN. “Other payments” include
-3
-payments made in the course of the requester’s trade or business for  You must show your individual name on line 1, and enter your business
-rents, royalties, goods (other than bills for merchandise), medical and or DBA name, if any, on line 2. You may use either your SSN or EIN (if
-health care services (including payments to corporations), payments to you have one), but the IRS encourages you to use your SSN.
-a nonemployee for services, payments made in settlement of payment 4 List first and circle the name of the trust, estate, or pension trust. (Do
-card and third-party network transactions, payments to certain fishing not furnish the TIN of the personal representative or trustee unless the
-boat crew members and fishermen, and gross proceeds paid to legal entity itself is not designated in the account title.)
+payments made in the course of the requester’s trade or business for
+rents, royalties, goods (other than bills for merchandise), medical and
+health care services (including payments to corporations), payments to
+a nonemployee for services, payments made in settlement of payment
+card and third-party network transactions, payments to certain fishing
+boat crew members and fishermen, and gross proceeds paid to
 attorneys (including payments to corporations).
-* Note: The grantor must also provide a Form W-9 to the trustee of the
-5. Mortgage interest paid by you, acquisition or abandonment of trust.
+5. Mortgage interest paid by you, acquisition or abandonment of
 secured property, cancellation of debt, qualified tuition program
-payments (under section 529), ABLE accounts (under section 529A), ** For more information on optional filing methods for grantor trusts, see
-IRA, Coverdell ESA, Archer MSA or HSA contributions or the Instructions for Form 1041.
-distributions, and pension distributions. You must give your correct Note: If no name is circled when more than one name is listed, the
-TIN, but you do not have to sign the certification. number will be considered to be that of the first name listed.
-What Name and Number To Give the Requester Secure Your Tax Records From Identity Theft
-For this type of account: Give name and SSN of: Identity theft occurs when someone uses your personal information,
-1. Individual The individual such as your name, SSN, or other identifying information, without your
-2. Two or more individuals (joint account) The actual owner of the account or, permission to commit fraud or other crimes. An identity thief may use
-other than an account maintained by if combined funds, the first individual your SSN to get a job or may file a tax return using your SSN to receive
-an FFI on the account1 a refund.
-3. Two or more U.S. persons Each holder of the account To reduce your risk:
-(joint account maintained by an FFI) • Protect your SSN,
-4. Custodial account of a minor The minor2 • Ensure your employer is protecting your SSN, and
+payments (under section 529), ABLE accounts (under section 529A),
+IRA, Coverdell ESA, Archer MSA or HSA contributions or
+distributions, and pension distributions. You must give your correct
+TIN, but you do not have to sign the certification.
+What Name and Number To Give the Requester
+For this type of account: Give name and SSN of:
+1. Individual The individual
+2. Two or more individuals (joint account) The actual owner of the account or,
+other than an account maintained by if combined funds, the first individual
+an FFI on the account1
+3. Two or more U.S. persons Each holder of the account
+(joint account maintained by an FFI)
+4. Custodial account of a minor The minor2
 (Uniform Gift to Minors Act)
-• Be careful when choosing a tax return preparer.
 5. a. The usual revocable savings trust The grantor-trustee1
-(grantor is also trustee) If your tax records are affected by identity theft and you receive a
-1 notice from the IRS, respond right away to the name and phone number
+(grantor is also trustee)
+1
 b. So-called trust account that is not  The actual owner
-a legal or valid trust under state law printed on the IRS notice or letter.
-6. Sole proprietorship or disregarded The owner3 If your tax records are not currently affected by identity theft but you
-entity owned by an individual think you are at risk due to a lost or stolen purse or wallet, questionable
-credit card activity, or a questionable credit report, contact the IRS
-7. Grantor trust filing under Optional The grantor* Identity Theft Hotline at 800-908-4490 or submit Form 14039.
+a legal or valid trust under state law
+6. Sole proprietorship or disregarded The owner3
+entity owned by an individual
+7. Grantor trust filing under Optional The grantor*
 Filing Method 1 (see Regulations
-section 1.671-4(b)(2)(i)(A))** For more information, see Pub. 5027, Identity Theft Information for
+section 1.671-4(b)(2)(i)(A))**
+Page 5
+For this type of account: Give name and EIN of:
+8. Disregarded entity not owned by an The owner
+individual
+9. A valid trust, estate, or pension trust Legal entity4
+10. Corporation or LLC electing corporate The corporation
+status on Form 8832 or Form 2553
+11. Association, club, religious, charitable, The organization
+educational, or other tax-exempt
+organization
+12. Partnership or multi-member LLC The partnership
+13. A broker or registered nominee The broker or nominee
+14. Account with the Department of The public entity
+Agriculture in the name of a public
+entity (such as a state or local
+government, school district, or prison)
+that receives agricultural program
+payments
+15. Grantor trust filing Form 1041 or The trust
+under the Optional Filing Method 2,
+requiring Form 1099 (see Regulations
+section 1.671-4(b)(2)(i)(B))**
+1
+List first and circle the name of the person whose number you furnish.
+If only one person on a joint account has an SSN, that person’s number
+must be furnished.
+2 Circle the minor’s name and furnish the minor’s SSN.
+3
+You must show your individual name on line 1, and enter your business
+or DBA name, if any, on line 2. You may use either your SSN or EIN (if
+you have one), but the IRS encourages you to use your SSN.
+4 List first and circle the name of the trust, estate, or pension trust. (Do
+not furnish the TIN of the personal representative or trustee unless the
+legal entity itself is not designated in the account title.)
+* Note: The grantor must also provide a Form W-9 to the trustee of the
+trust.
+** For more information on optional filing methods for grantor trusts, see
+the Instructions for Form 1041.
+Note: If no name is circled when more than one name is listed, the
+number will be considered to be that of the first name listed.
+Secure Your Tax Records From Identity Theft
+Identity theft occurs when someone uses your personal information,
+such as your name, SSN, or other identifying information, without your
+permission to commit fraud or other crimes. An identity thief may use
+your SSN to get a job or may file a tax return using your SSN to receive
+a refund.
+To reduce your risk:
+• Protect your SSN,
+• Ensure your employer is protecting your SSN, and
+• Be careful when choosing a tax return preparer.
+If your tax records are affected by identity theft and you receive a
+notice from the IRS, respond right away to the name and phone number
+printed on the IRS notice or letter.
+If your tax records are not currently affected by identity theft but you
+think you are at risk due to a lost or stolen purse or wallet, questionable
+credit card activity, or a questionable credit report, contact the IRS
+Identity Theft Hotline at 800-908-4490 or submit Form 14039.
+For more information, see Pub. 5027, Identity Theft Information for
 Taxpayers.
 
 Form W-9 (Rev. 3-2024)
