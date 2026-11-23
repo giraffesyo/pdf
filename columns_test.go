@@ -84,3 +84,60 @@ func TestColumnReadingOrderKeepsTablesAndLists(t *testing.T) {
 		t.Errorf("alternating paragraphs = %q", got)
 	}
 }
+
+// TestColumnReadingOrderLaTeXGutter: LaTeX sets two columns 10pt apart,
+// one em of its 10pt text and less of 11pt text, and ends justified lines
+// with a space glyph. A section heading in one column shares a baseline
+// with the other column's text. The columns still read one after the
+// other.
+func TestColumnReadingOrderLaTeXGutter(t *testing.T) {
+	left := []string{
+		"the left column opens the story here ",
+		"and carries it down through several ",
+		"lines of justified prose until the  ",
+		"column ends near the bottom of it   ",
+	}
+	right := []string{
+		"then the right column picks it up",
+		"and finishes the thought for good",
+		"with a few more lines of prose to",
+	}
+	want := strings.Join(append(append(
+		[]string{"the left column opens the story here", "and carries it down through several",
+			"lines of justified prose until the", "column ends near the bottom of it"},
+		"2 Heading"), right...), "\n")
+	for _, size := range []float64{10, 11} {
+		advance := size / 2
+		// The left column's text ends at 40+36*advance; the gutter is 10.
+		x := 40 + 36*advance + 10
+		var glyphs []Glyph
+		for i, line := range left {
+			glyphs = append(glyphs, run(line, 40, 700-float64(i)*12, advance, size)...)
+		}
+		glyphs = append(glyphs, run("2 Heading", x, 700, 1.4*advance, 1.4*size)...)
+		for i, line := range right {
+			glyphs = append(glyphs, run(line, x, 688-float64(i)*12, advance, size)...)
+		}
+		if got := (Page{Glyphs: glyphs}).Text(); got != want {
+			t.Errorf("%vpt: text =\n%s\nwant\n%s", size, got, want)
+		}
+	}
+}
+
+// TestColumnReadingOrderMarginHeading: a heading set in the margin beside
+// the paragraph it starts stays below the end of the paragraph before it.
+func TestColumnReadingOrderMarginHeading(t *testing.T) {
+	page := Page{Glyphs: concat(
+		para(200, 700, 12, "the paragraph before the heading runs",
+			"over a few lines of text and ends", "here, above the gap."),
+		run("Margin Head", 40, 660, 6, 12),
+		para(200, 660, 12, "and the paragraph after the heading",
+			"starts beside it and runs on down",
+			"for a few more lines of prose too"),
+	)}
+	want := "the paragraph before the heading runs\nover a few lines of text and ends\nhere, above the gap.\n" +
+		"Margin Head\nand the paragraph after the heading\nstarts beside it and runs on down\nfor a few more lines of prose too"
+	if got := page.Text(); got != want {
+		t.Errorf("text =\n%s\nwant\n%s", got, want)
+	}
+}

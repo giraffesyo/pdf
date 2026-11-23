@@ -23,7 +23,7 @@ const (
 	// minGutterEm is the narrowest gutter, in font sizes: wider than the
 	// word spacing of justified text, narrower than column gutters, which
 	// run from about 1.8 em in journals to 3 em in newsletters.
-	minGutterEm = 1.0
+	minGutterEm = 0.9
 	// A column counts as prose when its fragments average this many
 	// words, are mostly letters, and it is this many font sizes wide:
 	// table cells hold a word or two, or numbers, in narrower columns.
@@ -33,6 +33,9 @@ const (
 	// A paragraph's lines fill its column: at least half of them reach
 	// this fraction of the column's width, where table cells vary.
 	minProseFill = 0.7
+	// minLineInk is the share of its span that a column's fragments on
+	// one row must cover to read as one line rather than as cells.
+	minLineInk = 0.7
 	// maxBandGapPitches closes a band at a vertical gap this many times
 	// its usual line pitch: both columns breaking at once marks a new
 	// region of the page.
@@ -196,17 +199,25 @@ func newRow(line layoutLine, backing []fragment) (row, []fragment) {
 	first := len(backing)
 	sizes := 0.0
 	begin := 0
+	inked := -1 // the latest glyph that is not a space
 	for i, g := range line.glyphs {
 		sizes += g.Size
-		if i == 0 {
+		if strings.TrimSpace(g.Text) == "" {
 			continue
 		}
-		prev := line.glyphs[i-1]
-		gap := g.X - (prev.X + math.Abs(prev.Advance))
-		if gap >= minGutterEm*max(prev.Size, g.Size, 1) {
-			backing = append(backing, newFragment(line, begin, i))
-			begin = i
+		// The gap runs from the last glyph a reader sees: a space glyph
+		// ending the left column's line would otherwise narrow it. It is
+		// measured in the smaller font, as a heading beside body text
+		// does not widen the body's gutter.
+		if inked >= 0 {
+			prev := line.glyphs[inked]
+			gap := g.X - (prev.X + math.Abs(prev.Advance))
+			if gap >= minGutterEm*max(min(prev.Size, g.Size), 1) {
+				backing = append(backing, newFragment(line, begin, i))
+				begin = i
+			}
 		}
+		inked = i
 	}
 	backing = append(backing, newFragment(line, begin, len(line.glyphs)))
 	r.fragments = backing[first:len(backing):len(backing)]
@@ -226,10 +237,19 @@ func newFragment(line layoutLine, start, end int) fragment {
 				f.chars++
 			}
 		}
-		f.minX = min(f.minX, g.X)
-		f.maxX = max(f.maxX, g.X+math.Abs(g.Advance))
+		if strings.TrimSpace(g.Text) != "" {
+			f.minX = min(f.minX, g.X)
+			f.maxX = max(f.maxX, g.X+math.Abs(g.Advance))
+		}
 		if i > start && strings.TrimSpace(g.Text) == "" && strings.TrimSpace(line.glyphs[i-1].Text) != "" {
 			f.words++
+		}
+	}
+	if f.chars == 0 {
+		// Spaces alone: their extent stands in for the text.
+		for _, g := range line.glyphs[start:end] {
+			f.minX = min(f.minX, g.X)
+			f.maxX = max(f.maxX, g.X+math.Abs(g.Advance))
 		}
 	}
 	// Words separated by gaps rather than space glyphs count too.
@@ -251,6 +271,7 @@ type bandState struct {
 	kept     []interval
 	pitches  []float64
 	size     float64
+	sizes    []float64 // the rows' font sizes, sorted
 
 	columnPitches []float64 // gaps between rows of the same column, sorted
 	lastOffset    []float64 // per column, the offset of its latest row
@@ -265,6 +286,7 @@ type bandState struct {
 // until the next call.
 func (b *bandState) grow(rows []row, start int) (int, []interval) {
 	b.coverage, b.pitches, b.kept, b.size = b.coverage[:0], b.pitches[:0], b.kept[:0], 0
+	b.sizes = b.sizes[:0]
 	b.columnPitches, b.lastOffset = b.columnPitches[:0], b.lastOffset[:0]
 	b.add(rows[start])
 	prevColumn := -1 // column of the previous row, -1 when unknown or several
@@ -336,6 +358,8 @@ func (b *bandState) grow(rows []row, start int) (int, []interval) {
 // add merges a row's fragments into the band's coverage.
 func (b *bandState) add(r row) {
 	b.size = max(b.size, r.size)
+	at, _ := slices.BinarySearch(b.sizes, r.size)
+	b.sizes = slices.Insert(b.sizes, at, r.size)
 	for _, f := range r.fragments {
 		span := interval{f.minX, f.maxX}
 		i, _ := slices.BinarySearchFunc(b.coverage, span.lo, func(c interval, lo float64) int {
@@ -364,7 +388,10 @@ func (b *bandState) add(r row) {
 // the text is too narrow to be a column, and its gap is no gutter.
 func (b *bandState) findGutters() bool {
 	b.gutters = b.gutters[:0]
-	minGap := minGutterEm * max(b.size, 1)
+	// Gutters are measured in the body text's size: a heading in one
+	// column does not widen them.
+	body := b.sizes[(len(b.sizes)-1)/2]
+	minGap := minGutterEm * max(body, 1)
 	minColumn := minColumnEm * max(b.size, 1)
 	columnStart := b.coverage[0].lo
 	for k := 1; k < len(b.coverage); k++ {
@@ -398,6 +425,12 @@ func appendBand(out []layoutLine, rows []row, gutters []interval, allGutters boo
 		}
 		return out
 	}
+	// The end of a paragraph above the other columns' start reads first.
+	lead := leadingRows(rows, gutters)
+	for _, r := range rows[:lead] {
+		out = append(out, r.line)
+	}
+	rows = rows[lead:]
 	order := make([]int, columns)
 	for c := range order {
 		order[c] = c
@@ -423,6 +456,41 @@ func appendBand(out []layoutLine, rows []row, gutters []interval, allGutters boo
 		}
 	}
 	return out
+}
+
+// leadingRows returns how many rows at the top of a band read before its
+// columns: a run in one column that ends at a paragraph-sized gap, below
+// which another column begins. Such a run is the end of a paragraph
+// above, and the column beside it, such as a heading set in the margin,
+// starts below it. It is the counterpart of the gap that ends a band
+// where one column runs on alone at its foot.
+func leadingRows(rows []row, gutters []interval) int {
+	column := rowColumn(rows[0], gutters)
+	if column < 0 {
+		return 0
+	}
+	n := 1
+	for n < len(rows) && rowColumn(rows[n], gutters) == column {
+		n++
+	}
+	if n >= len(rows)-1 {
+		return 0
+	}
+	// The band's line pitch, from the gaps below the run.
+	var pitches []float64
+	for i := n + 1; i < len(rows); i++ {
+		if gap := rows[i-1].offset - rows[i].offset; gap >= 0.5*max(rows[i].size, 1) {
+			pitches = append(pitches, gap)
+		}
+	}
+	if len(pitches) == 0 {
+		return 0
+	}
+	slices.Sort(pitches)
+	if rows[n-1].offset-rows[n].offset > maxTailGapPitches*pitches[len(pitches)/2] {
+		return n
+	}
+	return 0
 }
 
 // sideBySide reports whether a band's columns are read one after another:
@@ -477,25 +545,36 @@ func rowColumn(r row, gutters []interval) int {
 // proseColumns counts the band's columns that hold prose rather than
 // table cells.
 func proseColumns(rows []row, gutters []interval) int {
-	type stats struct {
-		fragments, words, letters, chars int
-		minX, maxX, size                 float64
-		widths                           []float64
-	}
-	columns := make([]stats, len(gutters)+1)
+	columns := make([]columnStats, len(gutters)+1)
 	for c := range columns {
 		columns[c].minX, columns[c].maxX = math.Inf(1), math.Inf(-1)
 	}
 	for _, r := range rows {
-		for _, f := range r.fragments {
-			c := &columns[columnOf(f, gutters)]
-			c.fragments++
-			c.words += f.words
-			c.letters += f.letters
-			c.chars += f.chars
-			c.minX, c.maxX = min(c.minX, f.minX), max(c.maxX, f.maxX)
-			c.size = max(c.size, r.size)
-			c.widths = append(c.widths, f.maxX-f.minX)
+		// A column's fragments on one row that mostly fill their span
+		// are one line of it, as appendBand joins them: a contents line's
+		// number, title, leader and page. Sparse ones, such as a grid's
+		// cells, count one by one.
+		for i := 0; i < len(r.fragments); {
+			col := columnOf(r.fragments[i], gutters)
+			j, ink := i, 0.0
+			for ; j < len(r.fragments) && columnOf(r.fragments[j], gutters) == col; j++ {
+				ink += r.fragments[j].maxX - r.fragments[j].minX
+			}
+			group := r.fragments[i:j]
+			c := &columns[col]
+			span := group[len(group)-1].maxX - group[0].minX
+			if ink < minLineInk*span {
+				for _, f := range group {
+					c.add(f.words, f.letters, f.chars, f.minX, f.maxX, r.size)
+				}
+			} else {
+				words, letters, chars := 0, 0, 0
+				for _, f := range group {
+					words, letters, chars = words+f.words, letters+f.letters, chars+f.chars
+				}
+				c.add(words, letters, chars, group[0].minX, group[len(group)-1].maxX, r.size)
+			}
+			i = j
 		}
 	}
 	prose := 0
@@ -518,6 +597,24 @@ func proseColumns(rows []row, gutters []interval) int {
 		}
 	}
 	return prose
+}
+
+// columnStats sums up a column's lines for proseColumns.
+type columnStats struct {
+	fragments, words, letters, chars int
+	minX, maxX, size                 float64
+	widths                           []float64
+}
+
+// add counts one line, or one cell, of the column.
+func (c *columnStats) add(words, letters, chars int, minX, maxX, size float64) {
+	c.fragments++
+	c.words += words
+	c.letters += letters
+	c.chars += chars
+	c.minX, c.maxX = min(c.minX, minX), max(c.maxX, maxX)
+	c.size = max(c.size, size)
+	c.widths = append(c.widths, maxX-minX)
 }
 
 // columnOf returns the column a fragment falls in: the number of gutters
